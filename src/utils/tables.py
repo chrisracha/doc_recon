@@ -226,6 +226,13 @@ class TableExtractor:
             min_cols=self.min_cols
         )
         
+        # Try to load PaddleOCR table extractor (preferred for image tables)
+        try:
+            self._extractors["paddleocr"] = PaddleOCRTableExtractor(use_gpu=self.use_gpu)
+            logger.info("PaddleOCR table extractor available")
+        except Exception as e:
+            logger.debug(f"PaddleOCR table extractor not available: {e}")
+        
         # Try to load Camelot
         try:
             self._extractors["camelot"] = CamelotTableExtractor()
@@ -273,7 +280,18 @@ class TableExtractor:
         
         # If no results from Camelot, try image-based methods
         if not results:
-            if "deep" in self._extractors and self.method in ["deep", "hybrid"]:
+            # Try PaddleOCR first (best for image tables)
+            if "paddleocr" in self._extractors and self.method in ["paddleocr", "hybrid"]:
+                try:
+                    paddle_results = self._extractors["paddleocr"].extract(image)
+                    if paddle_results:
+                        results.extend(paddle_results)
+                        logger.info(f"PaddleOCR found {len(paddle_results)} tables")
+                except Exception as e:
+                    logger.warning(f"PaddleOCR extraction failed: {e}")
+            
+            # Try deep learning model
+            if not results and "deep" in self._extractors and self.method in ["deep", "hybrid"]:
                 try:
                     deep_results = self._extractors["deep"].extract(image)
                     if deep_results:
@@ -287,7 +305,7 @@ class TableExtractor:
                 try:
                     cv_results = self._extractors["opencv"].extract(image)
                     if cv_results:
-                        # Don't duplicate if deep learning already found tables
+                        # Don't duplicate if other methods already found tables
                         if not results:
                             results.extend(cv_results)
                         logger.info(f"OpenCV found {len(cv_results)} tables")
@@ -390,6 +408,151 @@ class CamelotTableExtractor:
 
 
 # ============================================================================
+# PaddleOCR Table Extractor
+# ============================================================================
+
+class PaddleOCRTableExtractor:
+    """Table extraction using PaddleOCR's PPStructure."""
+    
+    def __init__(self, use_gpu: bool = False):
+        self.use_gpu = use_gpu
+        self._table_engine = None
+        self._initialize()
+    
+    def _initialize(self):
+        """Initialize PaddleOCR table recognition."""
+        try:
+            from paddleocr import PPStructure
+            
+            self._table_engine = PPStructure(
+                show_log=False,
+                use_gpu=self.use_gpu,
+                table=True,
+                ocr=True,
+                layout=False  # We only want table detection
+            )
+            logger.info("PaddleOCR PPStructure initialized for table extraction")
+            
+        except ImportError:
+            raise ImportError(
+                "PaddleOCR not available. Install with: pip install paddleocr paddlepaddle"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize PPStructure: {e}")
+    
+    def extract(self, image: np.ndarray) -> List[TableResult]:
+        """Extract tables from image using PPStructure."""
+        import cv2
+        
+        if self._table_engine is None:
+            return []
+        
+        # Convert BGR to RGB if needed
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        else:
+            rgb_image = image
+        
+        try:
+            # Run PPStructure
+            result = self._table_engine(rgb_image)
+            
+            tables = []
+            for item in result:
+                if item.get('type') == 'table':
+                    table_result = self._parse_table_result(item, image)
+                    if table_result:
+                        tables.append(table_result)
+            
+            return tables
+            
+        except Exception as e:
+            logger.error(f"PaddleOCR table extraction error: {e}")
+            return []
+    
+    def _parse_table_result(self, item: dict, image: np.ndarray) -> Optional[TableResult]:
+        """Parse PPStructure table result into TableResult."""
+        try:
+            # Get bounding box
+            bbox = item.get('bbox', [0, 0, image.shape[1], image.shape[0]])
+            x1, y1, x2, y2 = map(int, bbox)
+            
+            # Get HTML table result
+            res = item.get('res', {})
+            html_table = res.get('html', '')
+            
+            # Parse HTML table to extract cells
+            cells, num_rows, num_cols = self._parse_html_table(html_table)
+            
+            if num_rows < 2 or num_cols < 1:
+                return None
+            
+            return TableResult(
+                cells=cells,
+                num_rows=num_rows,
+                num_cols=num_cols,
+                confidence=0.85,  # PPStructure is generally reliable
+                bbox=(x1, y1, x2, y2),
+                method_used="paddleocr"
+            )
+            
+        except Exception as e:
+            logger.debug(f"Failed to parse table result: {e}")
+            return None
+    
+    def _parse_html_table(self, html: str) -> Tuple[List[Cell], int, int]:
+        """Parse HTML table into cells."""
+        try:
+            from html.parser import HTMLParser
+            
+            class TableHTMLParser(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.cells = []
+                    self.current_row = 0
+                    self.current_col = 0
+                    self.in_cell = False
+                    self.cell_text = ""
+                    self.is_header = False
+                    self.max_cols = 0
+                    
+                def handle_starttag(self, tag, attrs):
+                    if tag == 'tr':
+                        self.current_col = 0
+                    elif tag in ('td', 'th'):
+                        self.in_cell = True
+                        self.cell_text = ""
+                        self.is_header = (tag == 'th')
+                        
+                def handle_endtag(self, tag):
+                    if tag in ('td', 'th'):
+                        self.cells.append(Cell(
+                            text=self.cell_text.strip(),
+                            row=self.current_row,
+                            col=self.current_col,
+                            is_header=self.is_header
+                        ))
+                        self.current_col += 1
+                        self.max_cols = max(self.max_cols, self.current_col)
+                        self.in_cell = False
+                    elif tag == 'tr':
+                        self.current_row += 1
+                        
+                def handle_data(self, data):
+                    if self.in_cell:
+                        self.cell_text += data
+            
+            parser = TableHTMLParser()
+            parser.feed(html)
+            
+            return parser.cells, parser.current_row, parser.max_cols
+            
+        except Exception as e:
+            logger.debug(f"HTML parsing error: {e}")
+            return [], 0, 0
+
+
+# ============================================================================
 # OpenCV Table Extractor (Image-based)
 # ============================================================================
 
@@ -422,13 +585,30 @@ class OpenCVTableExtractor:
         if h < 80 or w < 150:
             return []  # Too small to be a table
         
+        # Try bordered table detection first
+        result = self._extract_bordered_table(gray, image)
+        if result:
+            return [result]
+        
+        # Fall back to borderless table detection
+        result = self._extract_borderless_table(gray, image)
+        if result:
+            return [result]
+        
+        return []
+    
+    def _extract_bordered_table(self, gray: np.ndarray, original: np.ndarray) -> Optional[TableResult]:
+        """Extract tables with visible borders/lines."""
+        import cv2
+        
+        h, w = gray.shape
+        
         # Threshold
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Detect horizontal and vertical lines with stricter parameters
-        # Use longer kernels to ensure we detect actual table lines, not text characters
-        h_kernel_size = max(w // 10, 50)  # At least 50 pixels or 10% of width
-        v_kernel_size = max(h // 10, 30)  # At least 30 pixels or 10% of height
+        # Use adaptive kernel sizes - smaller for better detection
+        h_kernel_size = max(w // 20, 30)  # At least 30 pixels or 5% of width
+        v_kernel_size = max(h // 30, 20)  # At least 20 pixels or ~3% of height
         
         horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_kernel_size, 1))
         vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_kernel_size))
@@ -436,16 +616,17 @@ class OpenCVTableExtractor:
         horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
         vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
         
-        # Count line pixels to verify we have actual table structure
+        # Count line pixels
         h_pixels = cv2.countNonZero(horizontal_lines)
         v_pixels = cv2.countNonZero(vertical_lines)
         
-        # Need minimum line coverage for a real table
+        # Relaxed threshold - only need SOME lines (0.001 = 0.1% coverage)
         h_coverage = h_pixels / (w * h)
         v_coverage = v_pixels / (w * h)
         
-        if h_coverage < 0.005 or v_coverage < 0.005:
-            return []  # Not enough line structure for a table
+        # Need at least horizontal OR vertical lines
+        if h_coverage < 0.001 and v_coverage < 0.001:
+            return None
         
         # Combine lines
         table_mask = cv2.add(horizontal_lines, vertical_lines)
@@ -453,40 +634,165 @@ class OpenCVTableExtractor:
         # Find contours (cells)
         contours, _ = cv2.findContours(table_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter and sort contours - stricter filtering
+        # Filter contours
+        cell_contours = self._filter_cell_contours(contours, w, h)
+        
+        if len(cell_contours) < self.min_rows * self.min_cols:
+            return None
+        
+        # Try to organize into grid
+        cells, num_rows, num_cols = self._organize_into_grid(cell_contours, original)
+        
+        if num_rows < self.min_rows or num_cols < self.min_cols:
+            return None
+        
+        return TableResult(
+            cells=cells,
+            num_rows=num_rows,
+            num_cols=num_cols,
+            confidence=0.75,
+            bbox=(0, 0, w, h),
+            method_used="opencv_bordered"
+        )
+    
+    def _extract_borderless_table(self, gray: np.ndarray, original: np.ndarray) -> Optional[TableResult]:
+        """Extract tables without visible borders using text alignment."""
+        import cv2
+        
+        h, w = gray.shape
+        
+        # Use adaptive thresholding for better text detection
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 11, 2
+        )
+        
+        # Dilate to connect text characters into blobs
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
+        dilated = cv2.dilate(binary, kernel, iterations=1)
+        
+        # Find text blob contours
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) < 4:  # Need at least 4 text blobs for a 2x2 table
+            return None
+        
+        # Get bounding boxes for text blobs
+        text_boxes = []
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            # Filter very small or very large blobs
+            if cw > 10 and ch > 5 and cw < w * 0.8 and ch < h * 0.3:
+                text_boxes.append((x, y, cw, ch))
+        
+        if len(text_boxes) < 4:
+            return None
+        
+        # Try to detect grid structure from text alignment
+        cells, num_rows, num_cols = self._detect_grid_from_text(text_boxes, original)
+        
+        if num_rows < self.min_rows or num_cols < self.min_cols:
+            return None
+        
+        return TableResult(
+            cells=cells,
+            num_rows=num_rows,
+            num_cols=num_cols,
+            confidence=0.6,  # Lower confidence for borderless
+            bbox=(0, 0, w, h),
+            method_used="opencv_borderless"
+        )
+    
+    def _filter_cell_contours(
+        self, 
+        contours: List, 
+        w: int, 
+        h: int
+    ) -> List[Tuple[int, int, int, int]]:
+        """Filter contours to find valid table cells."""
+        import cv2
+        
         cell_contours = []
-        min_cell_area = max(500, (w * h) * 0.005)  # At least 500 pixels or 0.5% of image
-        max_cell_area = (w * h) * 0.5  # No more than 50% of image
+        min_cell_area = max(300, (w * h) * 0.002)  # Reduced threshold
+        max_cell_area = (w * h) * 0.5
         
         for cnt in contours:
             x, y, cw, ch = cv2.boundingRect(cnt)
             area = cw * ch
-            # Filter by size - need reasonable cell size
+            
             if min_cell_area < area < max_cell_area:
-                # Cell aspect ratio check - cells shouldn't be too extreme
                 aspect = cw / max(ch, 1)
-                if 0.2 < aspect < 10:
+                if 0.15 < aspect < 15:  # More lenient aspect ratio
                     cell_contours.append((x, y, cw, ch))
         
-        if len(cell_contours) < self.min_rows * self.min_cols:
-            return []
+        return cell_contours
+    
+    def _detect_grid_from_text(
+        self,
+        text_boxes: List[Tuple[int, int, int, int]],
+        image: np.ndarray
+    ) -> Tuple[List[Cell], int, int]:
+        """Detect table grid structure from text blob positions."""
+        import cv2
         
-        # Try to organize into grid
-        cells, num_rows, num_cols = self._organize_into_grid(cell_contours, image)
+        if not text_boxes:
+            return [], 0, 0
         
-        if num_rows < self.min_rows or num_cols < self.min_cols:
-            return []
+        # Cluster by Y coordinate (rows)
+        sorted_by_y = sorted(text_boxes, key=lambda b: b[1])
         
-        result = TableResult(
-            cells=cells,
-            num_rows=num_rows,
-            num_cols=num_cols,
-            confidence=0.7,
-            bbox=(0, 0, w, h),
-            method_used="opencv"
-        )
+        rows = []
+        current_row = [sorted_by_y[0]]
+        threshold_y = image.shape[0] * 0.03  # 3% of height
         
-        return [result]
+        for box in sorted_by_y[1:]:
+            # Check if same row (similar y)
+            if abs(box[1] - current_row[0][1]) < threshold_y:
+                current_row.append(box)
+            else:
+                rows.append(sorted(current_row, key=lambda b: b[0]))
+                current_row = [box]
+        rows.append(sorted(current_row, key=lambda b: b[0]))
+        
+        # Check if we have consistent column count
+        col_counts = [len(row) for row in rows]
+        if not col_counts:
+            return [], 0, 0
+        
+        # Use mode of column counts
+        from collections import Counter
+        col_count_freq = Counter(col_counts)
+        expected_cols = col_count_freq.most_common(1)[0][0]
+        
+        # Only keep rows with expected column count (or close)
+        valid_rows = [r for r in rows if abs(len(r) - expected_cols) <= 1]
+        
+        if len(valid_rows) < self.min_rows:
+            return [], 0, 0
+        
+        # Extract text from cells
+        cells = []
+        num_cols = max(len(row) for row in valid_rows) if valid_rows else 0
+        
+        for row_idx, row in enumerate(valid_rows):
+            for col_idx, (x, y, cw, ch) in enumerate(row):
+                cell_img = image[y:y+ch, x:x+cw]
+                
+                try:
+                    import pytesseract
+                    text = pytesseract.image_to_string(cell_img, config='--psm 6').strip()
+                except:
+                    text = ""
+                
+                cells.append(Cell(
+                    text=text,
+                    row=row_idx,
+                    col=col_idx,
+                    bbox=(x, y, x+cw, y+ch),
+                    is_header=(row_idx == 0)
+                ))
+        
+        return cells, len(valid_rows), num_cols
     
     def _organize_into_grid(
         self,
@@ -727,5 +1033,4 @@ if __name__ == "__main__":
             print(f"\nMarkdown:\n{table.table_markdown}")
     else:
         print("Usage: python tables.py <image_or_pdf_path>")
-
 

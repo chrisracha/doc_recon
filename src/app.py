@@ -647,39 +647,123 @@ def generate_docx_bytes(document: dict) -> bytes:
 
 
 def generate_pdf_bytes(document: dict) -> bytes:
-    """Generate a PDF from document using markdown conversion."""
+    """Generate a PDF from document markdown using fpdf2."""
+    markdown = document.get("markdown", "")
+    if not markdown:
+        return None
+    
     try:
-        import subprocess
+        from fpdf import FPDF
+        from fpdf.enums import XPos, YPos
         
-        # Generate LaTeX content
-        latex_content = generate_simple_latex(document)
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
         
-        # Try to compile with pdflatex
-        with tempfile.TemporaryDirectory() as temp_dir:
-            tex_path = Path(temp_dir) / "document.tex"
-            pdf_path = Path(temp_dir) / "document.pdf"
-            
-            with open(tex_path, 'w', encoding='utf-8') as f:
-                f.write(latex_content)
-            
-            # Run pdflatex
-            result = subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", "document.tex"],
-                cwd=temp_dir,
-                capture_output=True,
-                timeout=60
-            )
-            
-            if pdf_path.exists():
-                with open(pdf_path, 'rb') as f:
-                    return f.read()
+        # Parse markdown and render to PDF
+        lines = markdown.split('\n')
+        in_table = False
+        table_rows = []
+        in_code_block = False
         
-        return None
-    except FileNotFoundError:
-        # pdflatex not installed
-        return None
+        for line in lines:
+            line = line.rstrip()
+            
+            # Code blocks
+            if line.startswith('```'):
+                in_code_block = not in_code_block
+                continue
+            
+            if in_code_block:
+                pdf.set_font('Courier', '', 10)
+                pdf.set_fill_color(240, 240, 240)
+                pdf.multi_cell(0, 5, line, fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                continue
+            
+            # Table handling
+            if '|' in line and not line.startswith('|--'):
+                cells = [c.strip() for c in line.split('|')[1:-1]]
+                if cells:
+                    if not in_table:
+                        in_table = True
+                        table_rows = []
+                    table_rows.append(cells)
+                continue
+            elif line.startswith('|--') or (line.startswith('|') and '-' in line):
+                continue  # Skip separator rows
+            elif in_table and table_rows:
+                # Render table
+                _render_pdf_table(pdf, table_rows)
+                table_rows = []
+                in_table = False
+            
+            # Headers
+            if line.startswith('# '):
+                pdf.set_font('Helvetica', 'B', 18)
+                pdf.multi_cell(0, 10, line[2:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(3)
+            elif line.startswith('## '):
+                pdf.set_font('Helvetica', 'B', 14)
+                pdf.multi_cell(0, 8, line[3:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(2)
+            elif line.startswith('### '):
+                pdf.set_font('Helvetica', 'B', 12)
+                pdf.multi_cell(0, 7, line[4:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                pdf.ln(2)
+            elif line.strip() == '':
+                pdf.ln(3)
+            elif line.startswith('- ') or line.startswith('* '):
+                pdf.set_font('Helvetica', '', 11)
+                pdf.cell(5, 6, chr(8226))  # Bullet
+                pdf.multi_cell(0, 6, line[2:], new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            else:
+                pdf.set_font('Helvetica', '', 11)
+                # Handle bold/italic
+                clean_line = line.replace('**', '').replace('*', '').replace('`', '')
+                pdf.multi_cell(0, 6, clean_line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        
+        # Render any remaining table
+        if in_table and table_rows:
+            _render_pdf_table(pdf, table_rows)
+        
+        return pdf.output()
+        
+    except ImportError:
+        pass
     except Exception as e:
-        return None
+        import logging
+        logging.getLogger(__name__).error(f"PDF generation error: {e}")
+    
+    return None
+
+
+def _render_pdf_table(pdf, rows):
+    """Render a table to PDF."""
+    from fpdf.enums import XPos, YPos
+    
+    if not rows:
+        return
+    
+    num_cols = max(len(row) for row in rows)
+    page_width = pdf.w - pdf.l_margin - pdf.r_margin
+    col_width = page_width / num_cols
+    
+    for i, row in enumerate(rows):
+        # Header row gets bold
+        if i == 0:
+            pdf.set_font('Helvetica', 'B', 10)
+            pdf.set_fill_color(230, 230, 230)
+        else:
+            pdf.set_font('Helvetica', '', 10)
+            pdf.set_fill_color(255, 255, 255)
+        
+        for j, cell in enumerate(row):
+            fill = (i == 0)
+            pdf.cell(col_width, 7, str(cell)[:30], border=1, fill=fill)
+        
+        pdf.ln()
+    
+    pdf.ln(3)
 
 
 def render_downloads(document: dict, settings: dict):
@@ -755,7 +839,7 @@ def render_downloads(document: dict, settings: dict):
             st.button(
                 "📕 PDF ❌",
                 use_container_width=True,
-                help="Requires pdflatex (install TeX Live or MiKTeX)",
+                help="Install: pip install fpdf2",
                 disabled=True
             )
 
