@@ -229,8 +229,23 @@ class Pix2TexRecognizer:
         try:
             from pix2tex.cli import LatexOCR
             
-            self.model = LatexOCR()
-            logger.info("Loaded pix2tex model")
+            try:
+                self.model = LatexOCR()
+                logger.info("Loaded pix2tex model")
+            except (FileNotFoundError, OSError) as e:
+                # Handle missing file errors (e.g., app.py in model/src)
+                if "app.py" in str(e) or "No such file" in str(e):
+                    logger.warning(f"pix2tex file error (may be harmless): {e}")
+                    # Try to continue anyway - the model might still work
+                    try:
+                        self.model = LatexOCR()
+                    except:
+                        raise RuntimeError(
+                            f"pix2tex installation issue: {e}\n"
+                            "Try: pip uninstall pix2tex && pip install pix2tex"
+                        )
+                else:
+                    raise
         except ImportError:
             raise ImportError(
                 "pix2tex not available. Install with: pip install pix2tex"

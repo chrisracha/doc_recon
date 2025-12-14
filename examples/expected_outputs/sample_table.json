@@ -1,0 +1,17 @@
+{
+  "task_id": "sample-sample_table",
+  "schema_version": "1.0",
+  "source_file": "sample_table.png",
+  "metadata": {
+    "title": "Table Extraction Demo",
+    "authors": "Sample Generator",
+    "abstract": null
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "blocks": []
+    }
+  ],
+  "notes": "This is a template - actual expected values should be filled manually"
+}

@@ -418,15 +418,34 @@ class OpenCVTableExtractor:
         
         h, w = gray.shape
         
+        # Minimum size requirements for tables
+        if h < 80 or w < 150:
+            return []  # Too small to be a table
+        
         # Threshold
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Detect horizontal and vertical lines
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (w // self.line_scale, 1))
-        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, h // self.line_scale))
+        # Detect horizontal and vertical lines with stricter parameters
+        # Use longer kernels to ensure we detect actual table lines, not text characters
+        h_kernel_size = max(w // 10, 50)  # At least 50 pixels or 10% of width
+        v_kernel_size = max(h // 10, 30)  # At least 30 pixels or 10% of height
+        
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_kernel_size, 1))
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_kernel_size))
         
         horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
         vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=2)
+        
+        # Count line pixels to verify we have actual table structure
+        h_pixels = cv2.countNonZero(horizontal_lines)
+        v_pixels = cv2.countNonZero(vertical_lines)
+        
+        # Need minimum line coverage for a real table
+        h_coverage = h_pixels / (w * h)
+        v_coverage = v_pixels / (w * h)
+        
+        if h_coverage < 0.005 or v_coverage < 0.005:
+            return []  # Not enough line structure for a table
         
         # Combine lines
         table_mask = cv2.add(horizontal_lines, vertical_lines)
@@ -434,14 +453,20 @@ class OpenCVTableExtractor:
         # Find contours (cells)
         contours, _ = cv2.findContours(table_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter and sort contours
+        # Filter and sort contours - stricter filtering
         cell_contours = []
+        min_cell_area = max(500, (w * h) * 0.005)  # At least 500 pixels or 0.5% of image
+        max_cell_area = (w * h) * 0.5  # No more than 50% of image
+        
         for cnt in contours:
             x, y, cw, ch = cv2.boundingRect(cnt)
             area = cw * ch
-            # Filter by size
-            if area > (w * h) * 0.001 and area < (w * h) * 0.9:
-                cell_contours.append((x, y, cw, ch))
+            # Filter by size - need reasonable cell size
+            if min_cell_area < area < max_cell_area:
+                # Cell aspect ratio check - cells shouldn't be too extreme
+                aspect = cw / max(ch, 1)
+                if 0.2 < aspect < 10:
+                    cell_contours.append((x, y, cw, ch))
         
         if len(cell_contours) < self.min_rows * self.min_cols:
             return []

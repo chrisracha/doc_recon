@@ -422,21 +422,18 @@ class PaddleOCREngine:
             lang_map = {"eng": "en", "chi_sim": "ch", "chi_tra": "chinese_cht"}
             paddle_lang = lang_map.get(language, language)
             
-            # Try new API first, fall back to old API
-            try:
-                self.ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    lang=paddle_lang,
-                    use_gpu=use_gpu
-                )
-            except TypeError:
-                # Older version with show_log
-                self.ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    lang=paddle_lang,
-                    use_gpu=use_gpu,
-                    show_log=False
-                )
+            # Use new API - show_log and use_angle_cls are deprecated
+            # PaddleOCR 3.x uses 'device' instead of 'use_gpu'
+            import os
+            os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
+            os.environ.setdefault('FLAGS_log_dir', '')
+            os.environ.setdefault('GLOG_minloglevel', '2')  # Suppress logs
+            
+            device = 'gpu' if use_gpu else 'cpu'
+            self.ocr = PaddleOCR(
+                lang=paddle_lang,
+                device=device
+            )
         except ImportError:
             raise ImportError(
                 "PaddleOCR not available. Install with: pip install paddleocr"
@@ -449,7 +446,7 @@ class PaddleOCREngine:
     def recognize(self, image: np.ndarray) -> OCRResult:
         """Recognize text using PaddleOCR."""
         try:
-            result = self.ocr.ocr(image, cls=True)
+            result = self.ocr.ocr(image)
         except Exception as e:
             logger.error(f"PaddleOCR error: {e}")
             return OCRResult(text="", confidence=0.0, engine_used="paddleocr")
@@ -460,24 +457,52 @@ class PaddleOCREngine:
         lines = []
         confidences = []
         
-        for line_data in result[0]:
-            if len(line_data) >= 2:
-                bbox_points = line_data[0]
-                text, conf = line_data[1]
+        # PaddleOCR 3.x returns OCRResult objects with dict-like access
+        r = result[0]
+        if hasattr(r, 'keys') and 'rec_texts' in r:
+            # PaddleOCR 3.x API
+            texts = r['rec_texts']
+            scores = r['rec_scores']
+            polys = r.get('rec_polys', [None] * len(texts))
+            
+            for text, conf, poly in zip(texts, scores, polys):
+                bbox = None
+                if poly is not None:
+                    try:
+                        xs = [p[0] for p in poly]
+                        ys = [p[1] for p in poly]
+                        bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
+                    except:
+                        pass
                 
-                # Convert polygon to bounding box
-                xs = [p[0] for p in bbox_points]
-                ys = [p[1] for p in bbox_points]
-                bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
-                
-                word = WordResult(text=text, confidence=conf, bbox=bbox)
+                word = WordResult(text=text, confidence=float(conf), bbox=bbox)
                 lines.append(LineResult(
                     text=text,
-                    confidence=conf,
+                    confidence=float(conf),
                     words=[word],
                     bbox=bbox
                 ))
-                confidences.append(conf)
+                confidences.append(float(conf))
+        else:
+            # PaddleOCR 2.x API (legacy)
+            for line_data in r:
+                if len(line_data) >= 2:
+                    bbox_points = line_data[0]
+                    text, conf = line_data[1]
+                    
+                    # Convert polygon to bounding box
+                    xs = [p[0] for p in bbox_points]
+                    ys = [p[1] for p in bbox_points]
+                    bbox = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
+                    
+                    word = WordResult(text=text, confidence=conf, bbox=bbox)
+                    lines.append(LineResult(
+                        text=text,
+                        confidence=conf,
+                        words=[word],
+                        bbox=bbox
+                    ))
+                    confidences.append(conf)
         
         # Sort lines by vertical position
         lines.sort(key=lambda l: l.bbox[1] if l.bbox else 0)

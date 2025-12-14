@@ -181,16 +181,22 @@ class LayoutDetector:
         """Try to initialize the specified or best available detector."""
         # If specific method requested, try only that
         if self.layout_method != "auto":
+            success = False
             if self.layout_method == "pix2text":
-                self._try_pix2text()
+                success = self._try_pix2text()
             elif self.layout_method == "layoutparser":
-                self._try_layoutparser()
+                success = self._try_layoutparser()
             elif self.layout_method == "paddleocr":
-                self._try_paddleocr()
+                success = self._try_paddleocr()
             elif self.layout_method == "classical":
                 self._use_classical()
+                success = True
             
-            if self._detector:
+            if success and self._detector:
+                return
+            elif not success and self.fallback_to_classical:
+                logger.warning(f"Requested layout method '{self.layout_method}' not available, falling back to classical")
+                self._use_classical()
                 return
         
         # Auto mode: try in order of preference
@@ -406,7 +412,11 @@ class Pix2TextLayoutDetector:
         try:
             from pix2text import Pix2Text
             import logging
+            import os
             logging.getLogger('pix2text').setLevel(logging.WARNING)
+            
+            # Suppress model download messages
+            os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
             
             # Initialize Pix2Text
             # It automatically handles equations and tables
@@ -826,23 +836,20 @@ class PaddleLayoutDetector:
             import logging
             logging.getLogger('ppocr').setLevel(logging.WARNING)
             
-            # Try new API first, fall back to old API
-            try:
-                self.engine = PPStructure(
-                    layout=True,
-                    table=False,
-                    ocr=False,
-                    use_gpu=use_gpu
-                )
-            except TypeError:
-                # Older version with show_log
-                self.engine = PPStructure(
-                    layout=True,
-                    table=False,
-                    ocr=False,
-                    show_log=False,
-                    use_gpu=use_gpu
-                )
+            # Use new API - show_log is deprecated
+            # PaddleOCR 3.x uses 'device' instead of 'use_gpu'
+            import os
+            os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
+            os.environ.setdefault('FLAGS_log_dir', '')
+            os.environ.setdefault('GLOG_minloglevel', '2')  # Suppress logs
+            
+            device = 'gpu' if use_gpu else 'cpu'
+            self.engine = PPStructure(
+                layout=True,
+                table=False,
+                ocr=False,
+                device=device
+            )
         except ImportError:
             raise ImportError(
                 "PaddleOCR PPStructure not available. "
@@ -1040,14 +1047,16 @@ class ClassicalLayoutDetector:
         if bbox.y2 > page_height * 0.95:
             return BlockType.FOOTER
         
-        # EQUATION detection - centered, short height, moderate width
-        # Equations are typically centered, single-line, and not full width
-        if is_centered and rel_height < 0.06 and 0.15 < rel_width < 0.7:
-            return BlockType.EQUATION_BLOCK
-        
-        # Also detect equations by checking if block has equation-like characteristics
+        # TABLE detection - check for grid-like structure first
         if image is not None:
-            if self._looks_like_equation(bbox, image, page_width, page_height):
+            if self._looks_like_table(bbox, image):
+                return BlockType.TABLE
+        
+        # EQUATION detection - very strict: must be centered, single line, moderate width
+        # Only classify as equation if VERY confident (to avoid false positives)
+        if is_centered and rel_height < 0.04 and 0.15 < rel_width < 0.5:
+            # Additional check: must not be multi-line
+            if bbox.height < 50:  # Very short - likely single line equation
                 return BlockType.EQUATION_BLOCK
         
         # Figure: roughly square, significant size
@@ -1095,6 +1104,75 @@ class ClassicalLayoutDetector:
         
         # 4. Have sparse content (lots of spacing typical in math)
         if 0.55 < white_ratio < 0.95 and is_short and is_centered:
+            return True
+        
+        return False
+    
+    def _looks_like_table(
+        self,
+        bbox: BoundingBox,
+        image: np.ndarray
+    ) -> bool:
+        """Check if a block looks like a table based on line detection."""
+        import cv2
+        
+        # Extract block region
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        block_img = gray[bbox.y1:bbox.y2, bbox.x1:bbox.x2]
+        if block_img.size == 0:
+            return False
+        
+        h, w = block_img.shape
+        
+        # Tables need minimum size
+        if h < 50 or w < 100:
+            return False
+        
+        # Threshold
+        _, binary = cv2.threshold(block_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Detect horizontal lines
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(w // 20, 10), 1))
+        horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+        h_line_count = cv2.countNonZero(horizontal_lines) / (w * 2)  # Normalize
+        
+        # Detect vertical lines
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(h // 20, 10)))
+        vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+        v_line_count = cv2.countNonZero(vertical_lines) / (h * 2)  # Normalize
+        
+        # Tables have both horizontal and vertical lines
+        has_h_lines = h_line_count > 2
+        has_v_lines = v_line_count > 2
+        
+        # Also check for grid intersection points
+        combined = cv2.bitwise_and(horizontal_lines, vertical_lines)
+        intersection_count = cv2.countNonZero(combined)
+        
+        # Must have significant line structure
+        if has_h_lines and has_v_lines and intersection_count > 4:
+            return True
+        
+        # Alternative: check for regular rectangular pattern (for borderless tables)
+        # Using contour analysis
+        contours, _ = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Count rectangular-ish contours of similar size (cells)
+        cell_candidates = []
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            area = cw * ch
+            if 100 < area < (w * h) * 0.25:  # Reasonable cell size
+                aspect = cw / max(ch, 1)
+                if 0.3 < aspect < 5:  # Not too extreme
+                    cell_candidates.append((cw, ch))
+        
+        # If we have multiple similar-sized rectangular regions, likely a table
+        if len(cell_candidates) >= 6:  # At least 2x3 grid
             return True
         
         return False

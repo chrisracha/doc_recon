@@ -20,6 +20,7 @@ from pathlib import Path
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["PYTHONWARNINGS"] = "ignore"
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"  # Suppress Pix2Text model check messages
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)

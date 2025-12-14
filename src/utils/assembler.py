@@ -346,6 +346,12 @@ class DocumentAssembler:
             processed_image
         )
         
+        # 2.6. Try to detect tables that weren't classified
+        layout_result.blocks = self._detect_potential_tables(
+            layout_result.blocks,
+            processed_image
+        )
+        
         # 3. Process each block
         processed_blocks = []
         for block in layout_result.blocks:
@@ -412,33 +418,118 @@ class DocumentAssembler:
             
             block_h, block_w = block_img.shape
             
+            # Skip multi-line blocks - likely paragraphs, not equations
+            # Estimate line count based on height (assuming ~20-40 pixels per line)
+            estimated_lines = block_h / 25
+            if estimated_lines > 2.5:
+                continue  # Multi-line text blocks are not equations
+            
             # Check if it looks like an equation:
-            # 1. Centered on page
+            # 1. Centered on page (stricter centering)
             margin_left = bbox.x1 / w
             margin_right = (w - bbox.x2) / w
-            is_centered = abs(margin_left - margin_right) < 0.2 and margin_left > 0.08
+            is_centered = abs(margin_left - margin_right) < 0.15 and margin_left > 0.15
             
-            # 2. Short height (likely single line)
-            is_short = block_h < h * 0.08
+            # 2. Short height (single/double line only)
+            is_short = block_h < h * 0.05
             
-            # 3. Not too narrow (has some content)
-            has_content = block_w > w * 0.1
+            # 3. Moderate width (not too narrow, not full width)
+            rel_width = block_w / w
+            has_content = 0.15 < rel_width < 0.6
             
-            # 4. High white space ratio (typical of equations)
+            # 4. High white space ratio (typical of equations - math has lots of spacing)
             _, binary = cv2.threshold(block_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             white_ratio = np.sum(binary > 200) / binary.size
-            is_sparse = 0.5 < white_ratio < 0.95
+            is_sparse = 0.65 < white_ratio < 0.95
             
-            # 5. Wide aspect ratio (equations tend to be wider than tall)
+            # 5. Wide aspect ratio (equations are wider than tall)
             aspect = block_w / max(block_h, 1)
-            is_wide = aspect > 2.0
+            is_wide = aspect > 3.0
             
-            # If multiple indicators suggest equation, reclassify
+            # 6. Check for math-like symbols in text (if we can do quick OCR)
+            # This is a strong indicator
+            
+            # Require MORE indicators for equation classification (was 3, now 4)
             indicators = sum([is_centered, is_short, is_sparse, is_wide, has_content])
             
-            if indicators >= 3:
+            if indicators >= 4:
                 block.block_type = BlockType.EQUATION_BLOCK
                 logger.info(f"Reclassified block {block.block_id} as equation (indicators: {indicators})")
+        
+        return blocks
+    
+    def _detect_potential_tables(
+        self,
+        blocks: List[Block],
+        image: np.ndarray
+    ) -> List[Block]:
+        """
+        Post-process blocks to detect potential tables.
+        
+        Looks for blocks with grid-like structure (horizontal/vertical lines).
+        """
+        import cv2
+        from .layout import BlockType
+        
+        h, w = image.shape[:2]
+        
+        # Convert to grayscale for analysis
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        for block in blocks:
+            # Only check paragraphs and figures (tables can be misclassified as either)
+            if block.block_type not in [BlockType.PARAGRAPH, BlockType.FIGURE, BlockType.UNKNOWN]:
+                continue
+            
+            bbox = block.bbox
+            block_img = gray[bbox.y1:bbox.y2, bbox.x1:bbox.x2]
+            
+            if block_img.size == 0:
+                continue
+            
+            block_h, block_w = block_img.shape
+            
+            # Tables need minimum size
+            if block_h < 60 or block_w < 100:
+                continue
+            
+            # Threshold
+            _, binary = cv2.threshold(block_img, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            
+            # Detect horizontal lines
+            h_kernel_size = max(block_w // 15, 15)
+            horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (h_kernel_size, 1))
+            horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+            
+            # Detect vertical lines  
+            v_kernel_size = max(block_h // 15, 15)
+            vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, v_kernel_size))
+            vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+            
+            # Count line pixels
+            h_pixels = cv2.countNonZero(horizontal_lines)
+            v_pixels = cv2.countNonZero(vertical_lines)
+            
+            # Calculate line density
+            h_density = h_pixels / (block_w * block_h) * 100
+            v_density = v_pixels / (block_w * block_h) * 100
+            
+            # Tables need CLEAR line structure - be strict to avoid false positives
+            # Both horizontal and vertical must have significant presence
+            has_h_lines = h_density > 1.0  # Increased threshold
+            has_v_lines = v_density > 1.0  # Increased threshold
+            
+            # Check for grid intersections (where h and v lines cross)
+            combined = cv2.bitwise_and(horizontal_lines, vertical_lines)
+            intersection_pixels = cv2.countNonZero(combined)
+            
+            # Require clear grid structure: strong lines AND intersections
+            if has_h_lines and has_v_lines and intersection_pixels > 20:
+                block.block_type = BlockType.TABLE
+                logger.info(f"Reclassified block {block.block_id} as table (h_density={h_density:.2f}, v_density={v_density:.2f}, intersections={intersection_pixels})")
         
         return blocks
     
