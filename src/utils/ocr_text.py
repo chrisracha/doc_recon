@@ -315,21 +315,33 @@ class TesseractEngine:
         # Only apply aggressive preprocessing for degraded/scanned documents
         # Clean PDFs and screenshots should NOT be processed this way
         if aggressive:
-            # Apply adaptive thresholding for better text contrast
-            # This helps with scanned documents but hurts clean PDFs
+            # 1. Remove salt-and-pepper noise first (before thresholding)
+            gray = cv2.medianBlur(gray, 3)
+            
+            # 2. Apply CLAHE for uneven lighting / low contrast
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            gray = clahe.apply(gray)
+            
+            # 3. Apply adaptive thresholding for better text contrast
             gray = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
             )
-            # Denoise
-            gray = cv2.medianBlur(gray, 3)
+            
+            # 4. Morphological opening to clean up remaining noise
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+            gray = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
         
         return gray
     
     def _is_clean_image(self, image: np.ndarray) -> bool:
-        """Detect if image is clean (PDF/screenshot) vs degraded (scan).
+        """Detect if image is clean (PDF/screenshot) vs degraded (scan/noisy).
         
-        Clean images have sharp edges and high contrast.
-        Degraded images have noise and blurry text.
+        Clean images have:
+        - Sharp edges (moderate Laplacian, not too high from noise)
+        - Uniform lighting (low variance in local means)
+        - Low noise level
+        
+        Degraded images have noise, blur, or uneven lighting.
         """
         import cv2
         
@@ -338,15 +350,33 @@ class TesseractEngine:
         else:
             gray = image
         
-        # Check sharpness using Laplacian variance
+        h, w = gray.shape
+        
+        # 1. Check sharpness using Laplacian variance
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         
-        # High sharpness (>500) = clean image (PDFs typically have very high values)
-        # Low sharpness (<100) = likely scanned/degraded
-        # Adaptive thresholding hurts clean images but helps degraded ones
-        is_clean = laplacian_var > 500
+        # 2. Estimate noise level (high Laplacian from noise vs real edges)
+        # Salt-and-pepper noise creates VERY high Laplacian (>10000)
+        # Clean PDFs typically have Laplacian between 500-10000
         
-        logger.debug(f"Image quality check: laplacian={laplacian_var:.1f}, clean={is_clean}")
+        # 3. Check lighting uniformity (uneven lighting = high variance in local means)
+        block_size = max(32, min(h, w) // 8)
+        means = []
+        for y in range(0, h - block_size, block_size):
+            for x in range(0, w - block_size, block_size):
+                block = gray[y:y+block_size, x:x+block_size]
+                means.append(block.mean())
+        lighting_variance = np.std(means) if means else 0
+        
+        # Decision logic:
+        # - Laplacian between 500-50000 = likely clean (too high = noise)
+        # - Lighting variance < 30 = uniform lighting
+        is_sharp = 500 < laplacian_var < 50000
+        is_uniform_lighting = lighting_variance < 30
+        
+        is_clean = is_sharp and is_uniform_lighting
+        
+        logger.debug(f"Image quality: laplacian={laplacian_var:.1f}, lighting_var={lighting_variance:.1f}, clean={is_clean}")
         return is_clean
     
     def recognize(self, image: np.ndarray) -> OCRResult:
