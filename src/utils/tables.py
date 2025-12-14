@@ -220,32 +220,37 @@ class TableExtractor:
     
     def _initialize_extractors(self):
         """Initialize available extractors."""
+        logger.info("[TableExtractor] Initializing table extractors...")
+        
         # Always have OpenCV fallback
         self._extractors["opencv"] = OpenCVTableExtractor(
             min_rows=self.min_rows,
             min_cols=self.min_cols
         )
+        logger.info("[TableExtractor] ✓ OpenCV extractor ready (fallback)")
         
         # Try to load PaddleOCR table extractor (preferred for image tables)
         try:
             self._extractors["paddleocr"] = PaddleOCRTableExtractor(use_gpu=self.use_gpu)
-            logger.info("PaddleOCR table extractor available")
+            logger.info("[TableExtractor] ✓ PaddleOCR PPStructure ready (image tables)")
         except Exception as e:
-            logger.debug(f"PaddleOCR table extractor not available: {e}")
+            logger.info(f"[TableExtractor] ✗ PaddleOCR not available: {e}")
         
-        # Try to load Camelot
+        # Try to load Camelot (for PDF vector tables)
         try:
             self._extractors["camelot"] = CamelotTableExtractor()
-            logger.info("Camelot available for PDF table extraction")
+            logger.info("[TableExtractor] ✓ Camelot ready (PDF vector tables)")
         except ImportError:
-            logger.warning("Camelot not available")
+            logger.info("[TableExtractor] ✗ Camelot not available (install: pip install camelot-py[cv])")
         
         # Try to load deep learning extractor
         try:
             self._extractors["deep"] = DeepTableExtractor(use_gpu=self.use_gpu)
-            logger.info("Deep learning table extractor available")
+            logger.info("[TableExtractor] ✓ Table Transformer ready (deep learning)")
         except Exception as e:
-            logger.warning(f"Deep learning table extractor not available: {e}")
+            logger.info(f"[TableExtractor] ✗ Table Transformer not available: {e}")
+        
+        logger.info(f"[TableExtractor] Initialized with extractors: {list(self._extractors.keys())}")
     
     def extract(
         self,
@@ -265,52 +270,71 @@ class TableExtractor:
             List of TableResult objects
         """
         results = []
+        logger.info(f"[TableExtractor] Starting extraction (method={self.method}, pdf={'yes' if pdf_path else 'no'})")
+        logger.info(f"[TableExtractor] Available extractors: {list(self._extractors.keys())}")
         
-        # Try Camelot for PDFs first
+        # Try Camelot for PDFs first (vector tables in PDFs)
         if pdf_path and "camelot" in self._extractors:
+            logger.info("[TableExtractor] Trying Camelot (PDF vector tables)...")
             try:
                 camelot_results = self._extractors["camelot"].extract(
                     pdf_path, page_num
                 )
                 if camelot_results:
                     results.extend(camelot_results)
-                    logger.info(f"Camelot found {len(camelot_results)} tables")
+                    logger.info(f"[TableExtractor] ✓ Camelot found {len(camelot_results)} table(s)")
+                else:
+                    logger.info("[TableExtractor] ✗ Camelot found no tables")
             except Exception as e:
-                logger.warning(f"Camelot extraction failed: {e}")
+                logger.warning(f"[TableExtractor] ✗ Camelot failed: {e}")
         
         # If no results from Camelot, try image-based methods
         if not results:
             # Try PaddleOCR first (best for image tables)
             if "paddleocr" in self._extractors and self.method in ["paddleocr", "hybrid"]:
+                logger.info("[TableExtractor] Trying PaddleOCR PPStructure...")
                 try:
                     paddle_results = self._extractors["paddleocr"].extract(image)
                     if paddle_results:
                         results.extend(paddle_results)
-                        logger.info(f"PaddleOCR found {len(paddle_results)} tables")
+                        logger.info(f"[TableExtractor] ✓ PaddleOCR found {len(paddle_results)} table(s)")
+                    else:
+                        logger.info("[TableExtractor] ✗ PaddleOCR found no tables")
                 except Exception as e:
-                    logger.warning(f"PaddleOCR extraction failed: {e}")
+                    logger.warning(f"[TableExtractor] ✗ PaddleOCR failed: {e}")
             
             # Try deep learning model
             if not results and "deep" in self._extractors and self.method in ["deep", "hybrid"]:
+                logger.info("[TableExtractor] Trying Deep Learning (Table Transformer)...")
                 try:
                     deep_results = self._extractors["deep"].extract(image)
                     if deep_results:
                         results.extend(deep_results)
-                        logger.info(f"Deep learning found {len(deep_results)} tables")
+                        logger.info(f"[TableExtractor] ✓ Deep Learning found {len(deep_results)} table(s)")
+                    else:
+                        logger.info("[TableExtractor] ✗ Deep Learning found no tables")
                 except Exception as e:
-                    logger.warning(f"Deep learning extraction failed: {e}")
+                    logger.warning(f"[TableExtractor] ✗ Deep Learning failed: {e}")
             
             # Fall back to OpenCV
             if not results or self.method in ["opencv", "hybrid"]:
+                logger.info("[TableExtractor] Trying OpenCV (line detection)...")
                 try:
                     cv_results = self._extractors["opencv"].extract(image)
                     if cv_results:
                         # Don't duplicate if other methods already found tables
                         if not results:
                             results.extend(cv_results)
-                        logger.info(f"OpenCV found {len(cv_results)} tables")
+                            logger.info(f"[TableExtractor] ✓ OpenCV found {len(cv_results)} table(s)")
+                        else:
+                            logger.info(f"[TableExtractor] OpenCV found {len(cv_results)} but skipping (already have results)")
+                    else:
+                        logger.info("[TableExtractor] ✗ OpenCV found no tables")
                 except Exception as e:
-                    logger.warning(f"OpenCV extraction failed: {e}")
+                    logger.warning(f"[TableExtractor] ✗ OpenCV failed: {e}")
+        
+        logger.info(f"[TableExtractor] Extraction complete: {len(results)} table(s) found")
+        return results
         
         return results
     
