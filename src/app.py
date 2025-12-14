@@ -169,7 +169,18 @@ def check_engine_availability():
     # Check pix2tex (Math OCR)
     try:
         from pix2tex.cli import LatexOCR
-        engines["pix2tex"] = {"available": True, "status": "✅ Ready"}
+        # Try to actually initialize it to catch compatibility errors
+        try:
+            _ = LatexOCR()
+            engines["pix2tex"] = {"available": True, "status": "✅ Ready"}
+        except (ValueError, RuntimeError) as e:
+            if "std_range" in str(e) or "albumentations" in str(e).lower():
+                engines["pix2tex"] = {
+                    "available": False, 
+                    "status": "❌ Compatibility error - install: pip install 'albumentations<1.4.0'"
+                }
+            else:
+                engines["pix2tex"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
     except ImportError:
         engines["pix2tex"] = {"available": False, "status": "❌ Not installed (pip install pix2tex)"}
     except Exception as e:
@@ -224,6 +235,40 @@ def render_sidebar():
         step=50,
         help="Higher DPI = better OCR accuracy but slower processing"
     )
+    
+    # Layout detection options
+    st.sidebar.subheader("Layout Detection")
+    
+    layout_method = st.sidebar.selectbox(
+        "Layout Method",
+        ["auto", "classical", "layoutparser", "paddleocr", "pix2text"],
+        index=0,
+        help="Method for detecting document structure (auto = try best available)"
+    )
+    
+    # Show status for layout methods
+    if layout_method == "auto":
+        st.sidebar.info("Auto: Will try best available method")
+    elif layout_method == "classical":
+        st.sidebar.success("Classical CV: ✅ Always available")
+    elif layout_method == "pix2text":
+        if engines.get("pix2text", {}).get("available"):
+            st.sidebar.success("Pix2Text: ✅ Ready")
+        else:
+            st.sidebar.error("Pix2Text: ❌ Not available")
+            st.sidebar.warning("Will fall back to classical")
+    elif layout_method == "layoutparser":
+        if engines.get("layoutparser", {}).get("available"):
+            st.sidebar.success("LayoutParser: ✅ Ready")
+        else:
+            st.sidebar.error("LayoutParser: ❌ Not available")
+            st.sidebar.warning("Will fall back to classical")
+    elif layout_method == "paddleocr":
+        if engines.get("paddleocr", {}).get("available"):
+            st.sidebar.success("PaddleOCR: ✅ Ready")
+        else:
+            st.sidebar.error("PaddleOCR: ❌ Not available")
+            st.sidebar.warning("Will fall back to classical")
     
     # OCR options
     st.sidebar.subheader("OCR Engine")
@@ -308,6 +353,7 @@ def render_sidebar():
         "use_gpu": use_gpu,
         "debug_mode": debug_mode,
         "dpi": dpi,
+        "layout_method": layout_method,
         "ocr_engine": ocr_engine,
         "math_engine": math_engine,
         "confidence_threshold": confidence_threshold,
@@ -380,14 +426,16 @@ def process_document(uploaded_file, settings) -> Optional[dict]:
                     st.warning(f"⚠️ {actual_math_engine} not available, falling back to simple")
                     actual_math_engine = "simple"
             
-            st.info(f"🔧 Using: **{actual_ocr_engine}** for text, **{actual_math_engine}** for math")
+            layout_method = settings.get("layout_method", "auto")
+            st.info(f"🔧 Using: **{layout_method}** layout, **{actual_ocr_engine}** OCR, **{actual_math_engine}** math")
             
             assembler = DocumentAssembler(
                 use_gpu=settings["use_gpu"],
                 debug_mode=settings["debug_mode"],
                 output_dir=output_dir,
                 ocr_engine=actual_ocr_engine,
-                math_engine=actual_math_engine
+                math_engine=actual_math_engine,
+                layout_method=layout_method
             )
             
             # Process document with progress updates

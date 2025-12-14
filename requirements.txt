@@ -27,6 +27,7 @@ pix2text>=1.0.0  # Uncomment for automatic equation/table detection
 
 # Math OCR
 pix2tex>=0.1.1  # LaTeX OCR
+albumentations<1.4.0  # Required for pix2tex compatibility (pix2tex uses old API)
 
 # Table extraction
 camelot-py[cv]>=0.11.0
@@ -34,7 +35,6 @@ img2table>=1.0.0  # Uncomment for better table detection
 
 # Document export
 python-docx>=0.8.11
-Jinja2>=3.1.0
 
 # Deep learning (optional, for advanced features)
 torch>=2.0.0

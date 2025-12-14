@@ -102,16 +102,31 @@ class MathOCR:
                 self._recognizer = Pix2TexRecognizer(use_gpu=self.use_gpu)
                 logger.info("Initialized pix2tex for math OCR")
             except Exception as e:
+                error_msg = str(e)
                 logger.warning(f"Failed to initialize pix2tex: {e}")
+                
+                # Check if it's the albumentations compatibility issue
+                if "std_range" in error_msg or "albumentations" in error_msg.lower():
+                    logger.error(
+                        "pix2tex compatibility issue detected!\n"
+                        "Fix: pip install 'albumentations<1.4.0'\n"
+                        "Or: pip uninstall albumentations && pip install 'albumentations==1.3.1'"
+                    )
+                
                 # Fall back to Mathpix if available
                 if self.mathpix_app_id and self.mathpix_app_key:
-                    self._recognizer = MathpixRecognizer(
-                        self.mathpix_app_id,
-                        self.mathpix_app_key
-                    )
-                    self.engine = "mathpix"
-                    logger.info("Falling back to Mathpix API for math OCR")
-                else:
+                    try:
+                        self._recognizer = MathpixRecognizer(
+                            self.mathpix_app_id,
+                            self.mathpix_app_key
+                        )
+                        self.engine = "mathpix"
+                        logger.info("Falling back to Mathpix API for math OCR")
+                    except Exception:
+                        pass
+                
+                # Final fallback to simple
+                if self._recognizer is None:
                     self._recognizer = SimpleMathRecognizer()
                     self.engine = "simple"
                     logger.warning("Using simple math recognizer (limited capability)")
@@ -220,6 +235,14 @@ class Pix2TexRecognizer:
             raise ImportError(
                 "pix2tex not available. Install with: pip install pix2tex"
             )
+        except (ValueError, RuntimeError) as e:
+            # Handle albumentations compatibility issues
+            if "std_range" in str(e) or "albumentations" in str(e).lower():
+                raise RuntimeError(
+                    f"pix2tex compatibility error: {e}\n"
+                    "Fix: pip install 'albumentations<1.4.0'"
+                )
+            raise RuntimeError(f"Failed to load pix2tex model: {e}")
         except Exception as e:
             raise RuntimeError(f"Failed to load pix2tex model: {e}")
         

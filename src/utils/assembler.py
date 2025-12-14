@@ -227,13 +227,15 @@ class DocumentAssembler:
         debug_mode: bool = False,
         output_dir: Optional[Union[str, Path]] = None,
         ocr_engine: str = "tesseract",
-        math_engine: str = "pix2tex"
+        math_engine: str = "pix2tex",
+        layout_method: str = "auto"
     ):
         self.use_gpu = use_gpu
         self.debug_mode = debug_mode
         self.output_dir = Path(output_dir) if output_dir else None
         self.ocr_engine = ocr_engine
         self.math_engine = math_engine
+        self.layout_method = layout_method
         
         # Initialize components lazily
         self._preprocessor = None
@@ -255,7 +257,8 @@ class DocumentAssembler:
             from .layout import LayoutDetector
             self._layout_detector = LayoutDetector(
                 use_gpu=self.use_gpu,
-                fallback_to_classical=True
+                fallback_to_classical=True,
+                layout_method=self.layout_method
             )
         return self._layout_detector
     

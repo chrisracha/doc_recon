@@ -122,6 +122,13 @@ Examples:
     )
     
     parser.add_argument(
+        "--layout-method",
+        choices=["auto", "classical", "layoutparser", "paddleocr", "pix2text"],
+        default="auto",
+        help="Layout detection method (default: auto - tries best available)"
+    )
+    
+    parser.add_argument(
         "--no-preprocessing",
         action="store_true",
         help="Disable image preprocessing (deskew, denoise)"
@@ -293,7 +300,10 @@ def run_pipeline(args) -> int:
     assembler = DocumentAssembler(
         use_gpu=args.use_gpu,
         debug_mode=args.debug,
-        output_dir=output_dir
+        output_dir=output_dir,
+        ocr_engine=args.ocr_engine,
+        math_engine=args.math_engine,
+        layout_method=args.layout_method
     )
     
     # Process document

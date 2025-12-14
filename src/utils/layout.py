@@ -164,31 +164,69 @@ class LayoutDetector:
         model_type: str = "lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config",
         confidence_threshold: float = 0.5,
         use_gpu: bool = False,
-        fallback_to_classical: bool = True
+        fallback_to_classical: bool = True,
+        layout_method: Optional[str] = None  # "auto", "pix2text", "layoutparser", "paddleocr", "classical"
     ):
         self.model_type = model_type
         self.confidence_threshold = confidence_threshold
         self.use_gpu = use_gpu
         self.fallback_to_classical = fallback_to_classical
+        self.layout_method = layout_method or "auto"
         self._detector = None
         self._method = None
         
         self._initialize_detector()
     
     def _initialize_detector(self):
-        """Try to initialize the best available detector."""
-        # Try Pix2Text first (best for automatic equation/table detection)
+        """Try to initialize the specified or best available detector."""
+        # If specific method requested, try only that
+        if self.layout_method != "auto":
+            if self.layout_method == "pix2text":
+                self._try_pix2text()
+            elif self.layout_method == "layoutparser":
+                self._try_layoutparser()
+            elif self.layout_method == "paddleocr":
+                self._try_paddleocr()
+            elif self.layout_method == "classical":
+                self._use_classical()
+            
+            if self._detector:
+                return
+        
+        # Auto mode: try in order of preference
+        # 1. LayoutParser (most reliable if available)
+        if self._try_layoutparser():
+            return
+        
+        # 2. PaddleOCR (good alternative)
+        if self._try_paddleocr():
+            return
+        
+        # 3. Pix2Text (good for equations/tables but can be slower)
+        if self._try_pix2text():
+            return
+        
+        # 4. Classical CV (always works)
+        if self.fallback_to_classical:
+            self._use_classical()
+        else:
+            raise RuntimeError("No layout detection method available")
+    
+    def _try_pix2text(self) -> bool:
+        """Try to initialize Pix2Text."""
         try:
             self._detector = Pix2TextLayoutDetector(use_gpu=self.use_gpu)
             self._method = "pix2text"
             logger.info("Using Pix2Text for layout detection (automatic equation/table detection)")
-            return
+            return True
         except ImportError as e:
             logger.debug(f"Pix2Text not available: {e}")
         except Exception as e:
             logger.debug(f"Failed to initialize Pix2Text: {e}")
-        
-        # Try LayoutParser
+        return False
+    
+    def _try_layoutparser(self) -> bool:
+        """Try to initialize LayoutParser."""
         try:
             self._detector = LayoutParserDetector(
                 model_type=self.model_type,
@@ -197,32 +235,31 @@ class LayoutDetector:
             )
             self._method = "layoutparser"
             logger.info("Using LayoutParser for layout detection")
-            return
+            return True
         except ImportError as e:
-            logger.warning(f"LayoutParser not available: {e}")
+            logger.debug(f"LayoutParser not available: {e}")
         except Exception as e:
-            logger.warning(f"Failed to initialize LayoutParser: {e}")
-        
-        # Try PaddleOCR layout
+            logger.debug(f"Failed to initialize LayoutParser: {e}")
+        return False
+    
+    def _try_paddleocr(self) -> bool:
+        """Try to initialize PaddleOCR."""
         try:
             self._detector = PaddleLayoutDetector(use_gpu=self.use_gpu)
             self._method = "paddleocr"
             logger.info("Using PaddleOCR for layout detection")
-            return
+            return True
         except ImportError as e:
-            logger.warning(f"PaddleOCR not available: {e}")
+            logger.debug(f"PaddleOCR not available: {e}")
         except Exception as e:
-            logger.warning(f"Failed to initialize PaddleOCR: {e}")
-        
-        # Fall back to classical methods
-        if self.fallback_to_classical:
-            self._detector = ClassicalLayoutDetector(
-                min_block_area=100
-            )
-            self._method = "classical"
-            logger.info("Using classical CV for layout detection (fallback)")
-        else:
-            raise RuntimeError("No layout detection method available")
+            logger.debug(f"Failed to initialize PaddleOCR: {e}")
+        return False
+    
+    def _use_classical(self):
+        """Use classical CV method."""
+        self._detector = ClassicalLayoutDetector(min_block_area=100)
+        self._method = "classical"
+        logger.info("Using classical CV for layout detection")
     
     def detect(
         self,
@@ -399,25 +436,29 @@ class Pix2TextLayoutDetector:
         
         # Run Pix2Text - it automatically detects equations and tables!
         # Pix2Text can work with PIL Image or file path
+        result = None
         try:
-            # Use recognize_text_page for full page analysis
-            # This returns structured output with equations and tables detected
-            result = self.p2t.recognize_text_page(pil_image)
-        except AttributeError:
-            # Fallback to recognize if recognize_text_page doesn't exist
-            try:
+            # Try recognize_text_page first (returns Page object with chunks)
+            if hasattr(self.p2t, 'recognize_text_page'):
+                result = self.p2t.recognize_text_page(pil_image)
+                logger.debug(f"Pix2Text recognize_text_page() result type: {type(result)}")
+            else:
+                # Fallback to recognize method
                 result = self.p2t.recognize(pil_image)
-            except Exception as e:
-                logger.error(f"Pix2Text recognition error: {e}")
-                return LayoutResult(
-                    blocks=[],
-                    page_width=image.shape[1],
-                    page_height=image.shape[0],
-                    confidence=0.0,
-                    method_used="pix2text"
-                )
+                logger.debug(f"Pix2Text recognize() result type: {type(result)}")
         except Exception as e:
-            logger.error(f"Pix2Text recognition error: {e}")
+            logger.error(f"Pix2Text recognition error: {e}", exc_info=True)
+            # Return empty result but don't crash
+            return LayoutResult(
+                blocks=[],
+                page_width=image.shape[1],
+                page_height=image.shape[0],
+                confidence=0.0,
+                method_used="pix2text"
+            )
+        
+        if result is None:
+            logger.error("Pix2Text returned None")
             return LayoutResult(
                 blocks=[],
                 page_width=image.shape[1],
@@ -430,78 +471,198 @@ class Pix2TextLayoutDetector:
         blocks = []
         h, w = image.shape[:2]
         
-        # Pix2Text returns structured output
-        # Try to extract blocks from the result
+        # Pix2Text recognize_text_page returns a Page object with .chunks attribute
+        # Each chunk has: type, bbox, text, etc.
+        chunks = []
+        
         if hasattr(result, 'chunks'):
             chunks = result.chunks
-        elif isinstance(result, dict) and 'chunks' in result:
-            chunks = result['chunks']
+            logger.debug(f"Found {len(chunks)} chunks from Pix2Text")
+        elif hasattr(result, 'elements'):
+            # Alternative attribute name
+            chunks = result.elements
+            logger.debug(f"Found {len(chunks)} elements from Pix2Text")
+        elif isinstance(result, dict):
+            chunks = result.get('chunks', result.get('elements', []))
+            logger.debug(f"Found {len(chunks)} chunks from dict result")
         elif isinstance(result, list):
             chunks = result
+            logger.debug(f"Result is a list with {len(chunks)} items")
         else:
-            # Result might be markdown string - parse it
-            logger.warning("Pix2Text returned unexpected format, using fallback")
-            chunks = []
+            # Result might be a string (markdown) or Page object
+            logger.warning(f"Pix2Text returned unexpected format: {type(result)}")
+            logger.debug(f"Result attributes: {dir(result) if hasattr(result, '__dict__') else 'N/A'}")
+            
+            # Try to get chunks from Page object
+            if hasattr(result, '__dict__'):
+                for attr in ['chunks', 'elements', 'blocks', 'regions']:
+                    if hasattr(result, attr):
+                        chunks = getattr(result, attr)
+                        logger.info(f"Found chunks via attribute: {attr}")
+                        break
         
-        for i, chunk in enumerate(chunks):
-            try:
-                # Get chunk type
-                chunk_type = getattr(chunk, 'type', None) or chunk.get('type', 'text') if isinstance(chunk, dict) else 'text'
+        if not chunks:
+            logger.warning("No chunks found in Pix2Text result")
+            
+            # Try to get markdown/text output as fallback
+            markdown_text = None
+            if hasattr(result, 'text'):
+                markdown_text = result.text
+            elif hasattr(result, 'markdown'):
+                markdown_text = result.markdown
+            elif isinstance(result, str):
+                markdown_text = result
+            elif isinstance(result, dict):
+                markdown_text = result.get('text') or result.get('markdown')
+            
+            if markdown_text:
+                logger.info(f"Using Pix2Text markdown output (length: {len(markdown_text)})")
+                # Parse markdown into blocks (simple heuristic)
+                lines = markdown_text.split('\n')
+                line_height = h // max(len(lines), 1)
                 
-                # Map to our block types
-                block_type = self.LABEL_MAP.get(chunk_type, BlockType.PARAGRAPH)
-                
-                # Get bbox
-                bbox_data = getattr(chunk, 'bbox', None) or chunk.get('bbox', None) if isinstance(chunk, dict) else None
-                if bbox_data:
-                    if isinstance(bbox_data, (list, tuple)) and len(bbox_data) >= 4:
-                        x1, y1, x2, y2 = bbox_data[:4]
-                        bbox = BoundingBox(int(x1), int(y1), int(x2), int(y2))
+                for i, line in enumerate(lines):
+                    if line.strip():
+                        y_pos = i * line_height
+                        block_type = BlockType.PARAGRAPH
+                        
+                        # Detect equations in markdown (LaTeX between $ or $$)
+                        if '$$' in line or (line.strip().startswith('$') and line.strip().endswith('$')):
+                            block_type = BlockType.EQUATION_BLOCK
+                        
+                        blocks.append(Block(
+                            bbox=BoundingBox(0, y_pos, w, min(y_pos + line_height, h)),
+                            block_type=block_type,
+                            confidence=0.7,
+                            block_id=f"p2t_md_{i}",
+                            text=line.strip() if block_type == BlockType.PARAGRAPH else None,
+                            metadata={"source": "markdown", "content": line.strip()}
+                        ))
+            else:
+                # Last resort: create a single block covering the whole page
+                logger.warning("Pix2Text returned no usable output - creating fallback block")
+                blocks.append(Block(
+                    bbox=BoundingBox(0, 0, w, h),
+                    block_type=BlockType.PARAGRAPH,
+                    confidence=0.3,
+                    block_id="p2t_fallback",
+                    metadata={"note": "Pix2Text returned no chunks or text"}
+                ))
+        else:
+            for i, chunk in enumerate(chunks):
+                try:
+                    # Get chunk type - Pix2Text uses 'text', 'formula', 'table', etc.
+                    chunk_type = None
+                    if hasattr(chunk, 'type'):
+                        chunk_type = chunk.type
+                    elif isinstance(chunk, dict):
+                        chunk_type = chunk.get('type', chunk.get('category', 'text'))
                     else:
-                        bbox = BoundingBox(0, i * 50, w, (i + 1) * 50)
-                else:
-                    # Estimate bbox
-                    y_pos = (i * h) // max(len(chunks), 1)
-                    bbox = BoundingBox(0, y_pos, w, min(y_pos + 50, h))
-                
-                # Get content
-                if hasattr(chunk, 'text'):
-                    content = chunk.text
-                elif isinstance(chunk, dict):
-                    content = chunk.get('text', chunk.get('content', ''))
-                else:
-                    content = str(chunk)
-                
-                confidence = getattr(chunk, 'score', chunk.get('score', 0.8) if isinstance(chunk, dict) else 0.8)
-                
-                block = Block(
-                    bbox=bbox,
-                    block_type=block_type,
-                    confidence=float(confidence),
-                    block_id=f"p2t_{i}",
-                    text=content if block_type == BlockType.PARAGRAPH else None,
-                    metadata={
-                        "pix2text_type": chunk_type,
-                        "content": content
+                        # Try to infer from content
+                        chunk_type = 'text'
+                    
+                    # Map Pix2Text types to our block types
+                    # Pix2Text uses: 'text', 'formula', 'table', 'figure', etc.
+                    type_map = {
+                        'text': BlockType.PARAGRAPH,
+                        'formula': BlockType.EQUATION_BLOCK,
+                        'equation': BlockType.EQUATION_BLOCK,
+                        'table': BlockType.TABLE,
+                        'figure': BlockType.FIGURE,
+                        'title': BlockType.TITLE,
                     }
-                )
-                
-                # Special handling for equations - Pix2Text may have LaTeX
-                if block_type in [BlockType.EQUATION_BLOCK, BlockType.EQUATION_INLINE]:
-                    latex = getattr(chunk, 'latex', None) or (chunk.get('latex') if isinstance(chunk, dict) else None)
-                    if latex:
-                        block.metadata['latex'] = latex
-                
-                # Special handling for tables
-                if block_type == BlockType.TABLE:
-                    table_data = getattr(chunk, 'table', None) or (chunk.get('table') if isinstance(chunk, dict) else None)
-                    if table_data:
-                        block.metadata['table_data'] = table_data
-                
-                blocks.append(block)
-            except Exception as e:
-                logger.warning(f"Error parsing Pix2Text chunk {i}: {e}")
-                continue
+                    block_type = type_map.get(chunk_type.lower(), BlockType.PARAGRAPH)
+                    
+                    # Get bbox - Pix2Text provides bbox as [x1, y1, x2, y2] or similar
+                    bbox_data = None
+                    if hasattr(chunk, 'bbox'):
+                        bbox_data = chunk.bbox
+                    elif hasattr(chunk, 'box'):
+                        bbox_data = chunk.box
+                    elif isinstance(chunk, dict):
+                        bbox_data = chunk.get('bbox') or chunk.get('box')
+                    
+                    if bbox_data:
+                        if isinstance(bbox_data, (list, tuple)) and len(bbox_data) >= 4:
+                            x1, y1, x2, y2 = bbox_data[:4]
+                            bbox = BoundingBox(int(x1), int(y1), int(x2), int(y2))
+                        elif hasattr(bbox_data, '__iter__'):
+                            # Try to unpack if it's a nested structure
+                            coords = list(bbox_data)
+                            if len(coords) >= 4:
+                                bbox = BoundingBox(int(coords[0]), int(coords[1]), int(coords[2]), int(coords[3]))
+                            else:
+                                bbox = BoundingBox(0, i * 50, w, (i + 1) * 50)
+                        else:
+                            bbox = BoundingBox(0, i * 50, w, (i + 1) * 50)
+                    else:
+                        # Estimate bbox based on position
+                        y_pos = (i * h) // max(len(chunks), 1)
+                        bbox = BoundingBox(0, y_pos, w, min(y_pos + 50, h))
+                    
+                    # Get content/text
+                    content = ""
+                    if hasattr(chunk, 'text'):
+                        content = chunk.text or ""
+                    elif hasattr(chunk, 'content'):
+                        content = chunk.content or ""
+                    elif isinstance(chunk, dict):
+                        content = chunk.get('text', chunk.get('content', ''))
+                    else:
+                        content = str(chunk) if chunk else ""
+                    
+                    # Get confidence/score
+                    confidence = 0.8
+                    if hasattr(chunk, 'score'):
+                        confidence = chunk.score
+                    elif hasattr(chunk, 'confidence'):
+                        confidence = chunk.confidence
+                    elif isinstance(chunk, dict):
+                        confidence = chunk.get('score', chunk.get('confidence', 0.8))
+                    
+                    block = Block(
+                        bbox=bbox,
+                        block_type=block_type,
+                        confidence=float(confidence),
+                        block_id=f"p2t_{i}",
+                        text=content if block_type == BlockType.PARAGRAPH and content else None,
+                        metadata={
+                            "pix2text_type": chunk_type,
+                            "content": content
+                        }
+                    )
+                    
+                    # Special handling for equations - Pix2Text may have LaTeX
+                    if block_type in [BlockType.EQUATION_BLOCK, BlockType.EQUATION_INLINE]:
+                        latex = None
+                        if hasattr(chunk, 'latex'):
+                            latex = chunk.latex
+                        elif hasattr(chunk, 'formula'):
+                            latex = chunk.formula
+                        elif isinstance(chunk, dict):
+                            latex = chunk.get('latex') or chunk.get('formula')
+                        
+                        if latex:
+                            block.metadata['latex'] = latex
+                            block.text = None  # Don't store as text
+                    
+                    # Special handling for tables
+                    if block_type == BlockType.TABLE:
+                        table_data = None
+                        if hasattr(chunk, 'table'):
+                            table_data = chunk.table
+                        elif isinstance(chunk, dict):
+                            table_data = chunk.get('table')
+                        
+                        if table_data:
+                            block.metadata['table_data'] = table_data
+                    
+                    blocks.append(block)
+                    logger.debug(f"Created block {i}: {block_type.value} at {bbox}")
+                    
+                except Exception as e:
+                    logger.warning(f"Error parsing Pix2Text chunk {i}: {e}", exc_info=True)
+                    continue
         
         # Create debug image if requested
         debug_image = None
