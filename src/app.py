@@ -872,7 +872,7 @@ def main():
         with tabs[1]:
             markdown = doc.get("markdown", "")
             if markdown:
-                st.markdown(markdown)
+                st.code(markdown, language="markdown")
             else:
                 st.info("No markdown content")
         

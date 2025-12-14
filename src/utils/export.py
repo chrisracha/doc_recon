@@ -144,6 +144,152 @@ class MarkdownExporter:
             return block.text
         
         return ""
+    
+    def export_to_pdf(
+        self,
+        document: Any,
+        output_path: Union[str, Path],
+        engine: str = "auto"
+    ) -> Optional[Path]:
+        """
+        Export document to PDF via Markdown conversion.
+        
+        Args:
+            document: Document object
+            output_path: Output PDF file path
+            engine: Conversion engine ('auto', 'pandoc', 'weasyprint', 'md2pdf')
+            
+        Returns:
+            Path to generated PDF, or None if conversion failed
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Generate markdown first
+        if hasattr(document, 'markdown') and document.markdown:
+            markdown = document.markdown
+        else:
+            markdown = self._generate_markdown(document)
+        
+        # Create temp markdown file
+        temp_md = output_path.with_suffix('.md.tmp')
+        with open(temp_md, 'w', encoding='utf-8') as f:
+            f.write(markdown)
+        
+        pdf_path = None
+        
+        # Try conversion engines in order of preference
+        engines_to_try = []
+        if engine == "auto":
+            engines_to_try = ["pandoc", "weasyprint", "md2pdf"]
+        else:
+            engines_to_try = [engine]
+        
+        for eng in engines_to_try:
+            try:
+                if eng == "pandoc":
+                    pdf_path = self._convert_with_pandoc(temp_md, output_path)
+                elif eng == "weasyprint":
+                    pdf_path = self._convert_with_weasyprint(temp_md, output_path, markdown)
+                elif eng == "md2pdf":
+                    pdf_path = self._convert_with_md2pdf(temp_md, output_path)
+                
+                if pdf_path and pdf_path.exists():
+                    logger.info(f"Exported PDF using {eng}: {pdf_path}")
+                    break
+            except Exception as e:
+                logger.debug(f"{eng} failed: {e}")
+                continue
+        
+        # Cleanup temp file
+        if temp_md.exists():
+            temp_md.unlink()
+        
+        if not pdf_path or not pdf_path.exists():
+            logger.error(
+                "PDF conversion failed. Install one of:\n"
+                "  - pandoc: https://pandoc.org/installing.html\n"
+                "  - weasyprint: pip install weasyprint markdown\n"
+                "  - md2pdf: pip install md2pdf"
+            )
+            return None
+        
+        return pdf_path
+    
+    def _convert_with_pandoc(self, md_path: Path, pdf_path: Path) -> Optional[Path]:
+        """Convert markdown to PDF using pandoc."""
+        result = subprocess.run(
+            [
+                "pandoc", str(md_path),
+                "-o", str(pdf_path),
+                "--pdf-engine=xelatex",
+                "-V", "geometry:margin=1in"
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if result.returncode == 0 and pdf_path.exists():
+            return pdf_path
+        return None
+    
+    def _convert_with_weasyprint(self, md_path: Path, pdf_path: Path, markdown: str) -> Optional[Path]:
+        """Convert markdown to PDF using weasyprint."""
+        try:
+            import markdown as md_lib
+            from weasyprint import HTML, CSS
+            
+            # Convert markdown to HTML
+            html_content = md_lib.markdown(
+                markdown,
+                extensions=['tables', 'fenced_code', 'codehilite']
+            )
+            
+            # Wrap in HTML document with styling
+            full_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; line-height: 1.6; }}
+                    h1 {{ color: #333; border-bottom: 2px solid #333; }}
+                    h2 {{ color: #444; }}
+                    table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                    th {{ background-color: #f2f2f2; }}
+                    code {{ background-color: #f4f4f4; padding: 2px 6px; border-radius: 3px; }}
+                    pre {{ background-color: #f4f4f4; padding: 15px; overflow-x: auto; }}
+                    blockquote {{ border-left: 4px solid #ddd; margin: 0; padding-left: 20px; color: #666; }}
+                </style>
+            </head>
+            <body>
+                {html_content}
+            </body>
+            </html>
+            """
+            
+            HTML(string=full_html).write_pdf(str(pdf_path))
+            return pdf_path
+            
+        except ImportError:
+            raise ImportError("weasyprint or markdown not installed")
+    
+    def _convert_with_md2pdf(self, md_path: Path, pdf_path: Path) -> Optional[Path]:
+        """Convert markdown to PDF using md2pdf."""
+        try:
+            from md2pdf.core import md2pdf as convert_md2pdf
+            
+            convert_md2pdf(
+                pdf_path,
+                md_file_path=str(md_path),
+                css_file_path=None,
+                base_url=None
+            )
+            return pdf_path if pdf_path.exists() else None
+            
+        except ImportError:
+            raise ImportError("md2pdf not installed")
 
 
 # ============================================================================
@@ -626,7 +772,8 @@ class DocumentExporter:
         
         Args:
             document: Document object
-            formats: List of formats ('markdown', 'docx', 'latex', 'pdf', 'all')
+            formats: List of formats ('markdown', 'docx', 'latex', 'pdf', 'pdf_md', 'all')
+                     'pdf' uses LaTeX, 'pdf_md' uses Markdown conversion
             
         Returns:
             Dictionary mapping format to output path
@@ -652,6 +799,14 @@ class DocumentExporter:
                 document, path, figures_dir=figures_dir
             )
         
+        # PDF via Markdown (simpler, no LaTeX required)
+        if "pdf_md" in formats:
+            path = self.output_dir / f"{self.base_name}.pdf"
+            result = self.markdown_exporter.export_to_pdf(document, path)
+            if result:
+                results["pdf"] = result
+        
+        # PDF via LaTeX (better for math equations)
         if "latex" in formats or "pdf" in formats:
             path = self.output_dir / f"{self.base_name}.tex"
             compile_pdf = "pdf" in formats

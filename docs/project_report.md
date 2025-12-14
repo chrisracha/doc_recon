@@ -139,10 +139,14 @@ Layout detection identifies and classifies document regions:
 - Tables, Figures, Captions
 - Headers, Footers, References
 
-**Detection Methods:**
-1. **Primary**: LayoutParser with Detectron2 (PubLayNet pretrained model)
-2. **Alternative**: PaddleOCR layout detection
-3. **Fallback**: Classical CV using connected components and morphological operations
+**Detection Methods Comparison:**
+
+| Method | Best For | Pros | Cons |
+|--------|----------|------|------|
+| **Classical CV** | Simple documents | Fast, no ML dependencies | May miss complex layouts |
+| **Pix2Text** | Academic papers | Auto-detects equations/tables | Larger download |
+| **PaddleOCR** | Complex layouts | Good accuracy | Requires PaddlePaddle |
+| **LayoutParser** | Research use | Highly configurable | Complex setup (detectron2) |
 
 **Reading Order Resolution:**
 - Column detection using block center clustering
@@ -153,10 +157,19 @@ Layout detection identifies and classifies document regions:
 
 Multi-engine approach with confidence-based fallback:
 
-**Available Engines:**
-- **Tesseract OCR**: Best for clean, high-DPI documents (default)
-- **PaddleOCR**: Better for degraded images, supports PaddleOCR 3.x API
-- **EasyOCR**: Good multi-language support
+**Engine Comparison:**
+
+| Engine | Best For | Accuracy | Speed | Languages |
+|--------|----------|----------|-------|-----------|
+| **Tesseract OCR** | Clean PDFs | High on clean docs | Fast | 100+ |
+| **PaddleOCR** | Degraded scans | Good on noisy images | Medium | 80+ |
+| **EasyOCR** | Multi-language | Good overall | Slower | 80+ |
+
+**PaddleOCR 3.x API Changes:**
+The codebase handles PaddleOCR 3.x breaking changes:
+- `use_gpu` parameter → `device='cpu'` or `device='gpu'`
+- `show_log` parameter removed
+- Result format changed to `OCRResult` with `rec_texts` and `rec_scores` keys
 
 ```python
 # Engine priority
@@ -177,15 +190,16 @@ Multi-engine approach with confidence-based fallback:
 
 ### 3.4 Math/Equation OCR
 
-**Primary Engine: pix2tex (LaTeX-OCR)**
-- Local inference using PyTorch
-- No API calls required
-- Works offline
+**Engine Comparison:**
 
-**Fallback: Mathpix API**
-- Optional, requires API credentials
-- Better for degraded images
-- Provides confidence scores
+| Engine | Accuracy | Cost | Setup | Best For |
+|--------|----------|------|-------|----------|
+| **pix2tex** | Good | Free | `pip install pix2tex 'albumentations<1.4.0'` | Most equations |
+| **Mathpix API** | Excellent | Paid (1000 free/month) | API keys | Complex/handwritten |
+| **Simple** | N/A | Free | Built-in | Fallback only |
+
+**pix2tex Compatibility Note:**
+Requires `albumentations<1.4.0` due to API changes in newer versions. The `std_range` parameter was removed in albumentations 1.4.0+.
 
 **Confidence Estimation:**
 - Based on LaTeX validity (balanced braces)

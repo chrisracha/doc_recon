@@ -241,11 +241,57 @@ The pipeline reports the following metrics:
 | `MATHPIX_APP_ID` | Mathpix API ID (optional) | - |
 | `MATHPIX_APP_KEY` | Mathpix API Key (optional) | - |
 
-### Optional Libraries for Better Detection
+---
 
-#### Pix2Text (Recommended for Automatic Equation/Table Detection)
+## 🔧 OCR Engine Comparison
 
-**Pix2Text** is a free, open-source library that automatically detects equations and tables in documents. It's the easiest way to get good results!
+### Text OCR Engines
+
+| Engine | Best For | Pros | Cons | Install |
+|--------|----------|------|------|---------|
+| **Tesseract OCR** | Clean PDFs, academic docs | Fast, accurate on clean text, free | Struggles with degraded images | System install + `pip install pytesseract` |
+| **PaddleOCR** | Degraded scans, multi-language | Good on noisy images, 80+ languages | Larger model, slower startup | `pip install paddlepaddle paddleocr` |
+| **EasyOCR** | Multi-language documents | Easy setup, good language support | Slower than Tesseract | `pip install easyocr` |
+
+**Recommendation:** Start with Tesseract OCR (default). Switch to PaddleOCR for degraded scans or non-English text.
+
+### Math/Equation OCR Engines
+
+| Engine | Best For | Pros | Cons | Install |
+|--------|----------|------|------|---------|
+| **pix2tex** | Most equations | Free, local, good accuracy | Requires `albumentations<1.4.0` | `pip install pix2tex 'albumentations<1.4.0'` |
+| **Mathpix API** | Complex/degraded equations | Best accuracy, handles handwriting | Paid (1000 free/month), requires internet | Set `MATHPIX_APP_ID` and `MATHPIX_APP_KEY` |
+| **Simple** | Fallback | Always works | Just returns raw text, no LaTeX | Built-in |
+
+**Recommendation:** Use pix2tex (free, good accuracy). Use Mathpix API for production or handwritten equations.
+
+### Layout Detection Engines
+
+| Engine | Best For | Pros | Cons | Install |
+|--------|----------|------|------|---------|
+| **Classical CV** | Simple documents | Fast, no ML deps, always works | May miss complex layouts | Built-in (OpenCV) |
+| **Pix2Text** | Academic papers | Auto-detects equations/tables | Larger download | `pip install pix2text` |
+| **PaddleOCR** | Complex layouts | Good accuracy, multi-language | Requires PaddlePaddle | `pip install paddlepaddle paddleocr` |
+| **LayoutParser** | Research use | Highly configurable, pretrained models | Complex setup (detectron2) | `pip install layoutparser detectron2` |
+
+**Recommendation:** Use Classical CV for simple docs, Pix2Text for academic papers with equations.
+
+### Adaptive Preprocessing
+
+The system auto-detects image quality and applies appropriate preprocessing:
+
+| Image Type | Detection | Preprocessing Applied |
+|------------|-----------|----------------------|
+| Clean PDF/screenshot | Laplacian 500-50000, uniform lighting | Minimal (preserves quality) |
+| Blurry scan | Laplacian < 500 | CLAHE + adaptive threshold |
+| Noisy image | Laplacian > 50000 | Median blur + CLAHE + threshold |
+| Uneven lighting | Lighting variance > 30 | CLAHE normalization |
+
+---
+
+### Installing Optional Engines
+
+#### Pix2Text (Recommended - All-in-one)
 
 ```bash
 pip install pix2text
@@ -258,9 +304,26 @@ pip install pix2text
 - ✅ Works offline
 - ✅ Supports 80+ languages
 
-The system will automatically use Pix2Text if installed, otherwise falls back to other methods.
+#### pix2tex (Math OCR)
 
-#### Mathpix (for improved equation recognition - Paid)
+```bash
+# IMPORTANT: albumentations version matters!
+pip install pix2tex 'albumentations>=1.3.0,<1.4.0'
+```
+
+#### PaddleOCR 3.x
+
+```bash
+# Install PaddlePaddle first (CPU version)
+pip install paddlepaddle
+
+# Then PaddleOCR
+pip install paddleocr
+```
+
+**Note:** PaddleOCR 3.x has breaking API changes from 2.x. This codebase handles both versions.
+
+#### Mathpix (Paid - for production)
 
 1. Create an account at [mathpix.com](https://mathpix.com)
 2. Get your API credentials (free tier: 1,000 calls/month)

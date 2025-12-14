@@ -1,63 +1,119 @@
 # Document Reconstruction Pipeline - Python Dependencies
 # Install with: pip install -r requirements.txt
 
-# Core dependencies
-numpy>=1.24.0,<2.0.0
+# =============================================================================
+# CORE DEPENDENCIES (Required)
+# =============================================================================
+numpy>=1.24.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
 scikit-image>=0.21.0
 
 # PDF processing
 pdf2image>=1.16.0
-PyMuPDF>=1.23.0  # Alternative PDF library
+PyMuPDF>=1.23.0  # Alternative PDF library (fitz)
 
-# OCR - Tesseract
+# =============================================================================
+# TEXT OCR ENGINES
+# =============================================================================
+
+# Tesseract OCR (Required - baseline engine)
+# Also requires system install: https://github.com/tesseract-ocr/tesseract
 pytesseract>=0.3.10
 
-# OCR - Alternative engines (optional)
-paddleocr>=2.7.0  # Uncomment if using PaddleOCR
-easyocr>=1.7.0    # Uncomment if using EasyOCR
+# PaddleOCR (Optional - better for degraded images, multi-language)
+# NOTE: PaddleOCR 3.x has breaking API changes from 2.x
+# Requires: pip install paddlepaddle paddleocr
+paddlepaddle>=3.0.0
+paddleocr>=3.0.0
 
-# Layout detection
-layoutparser>=0.3.4  # Uncomment if using LayoutParser
-detectron2  # Required for LayoutParser, install separately
+# EasyOCR (Optional - good multi-language support)
+easyocr>=1.7.0
 
-# All-in-one detection (equations + tables)
-pix2text>=1.0.0  # Uncomment for automatic equation/table detection
+# =============================================================================
+# LAYOUT DETECTION ENGINES
+# =============================================================================
 
-# Math OCR
-pix2tex>=0.1.1  # LaTeX OCR
-albumentations<1.4.0  # Required for pix2tex compatibility (pix2tex uses old API)
+# Classical CV - Always available (uses OpenCV, no extra deps)
 
-# Table extraction
+# LayoutParser (Optional - deep learning layout detection)
+# NOTE: Requires detectron2 which can be tricky to install
+# layoutparser>=0.3.4
+# detectron2  # Install separately: pip install detectron2
+
+# Pix2Text (Recommended - automatic equation/table detection)
+# All-in-one solution for academic documents
+pix2text>=1.1.0
+
+# =============================================================================
+# MATH/EQUATION OCR ENGINES
+# =============================================================================
+
+# pix2tex (Recommended - free, local LaTeX OCR)
+# NOTE: Requires albumentations<1.4.0 for compatibility
+pix2tex>=0.1.1
+albumentations>=1.3.0,<1.4.0  # CRITICAL: pix2tex uses old API, breaks with >=1.4.0
+
+# Mathpix API (Optional - paid, better accuracy)
+# Set env vars: MATHPIX_APP_ID, MATHPIX_APP_KEY
+# No pip package needed, uses requests
+
+# =============================================================================
+# TABLE EXTRACTION
+# =============================================================================
+
+# Camelot (for vector PDFs with table lines)
 camelot-py[cv]>=0.11.0
-img2table>=1.0.0  # Uncomment for better table detection
 
-# Document export
+# img2table (Optional - image-based table detection)
+# img2table>=1.0.0
+
+# =============================================================================
+# DOCUMENT EXPORT
+# =============================================================================
+
+# DOCX export
 python-docx>=0.8.11
 
-# Deep learning (optional, for advanced features)
+# PDF export via Markdown (Optional - choose one)
+# weasyprint>=60.0  # pip install weasyprint markdown
+# md2pdf>=1.0.0     # pip install md2pdf
+# Or install pandoc: https://pandoc.org/installing.html
+
+# =============================================================================
+# DEEP LEARNING (Required for pix2tex, easyocr)
+# =============================================================================
+
+# PyTorch - CPU version (smaller, works everywhere)
+# For GPU: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 torch>=2.0.0
 torchvision>=0.15.0
-transformers>=4.30.0  # For Table Transformer
 
-# Web UI
+# Transformers (Optional - for Table Transformer)
+# transformers>=4.30.0
+
+# =============================================================================
+# WEB UI
+# =============================================================================
+
 streamlit>=1.28.0
 
-# API and networking
+# =============================================================================
+# UTILITIES
+# =============================================================================
+
 requests>=2.31.0
-
-# Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-
-# Development
-black>=23.0.0
-flake8>=6.1.0
-mypy>=1.5.0
-
-# Utilities
 tqdm>=4.65.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
+
+# =============================================================================
+# DEVELOPMENT & TESTING
+# =============================================================================
+
+pytest>=7.4.0
+pytest-cov>=4.1.0
+black>=23.0.0
+flake8>=6.1.0
+mypy>=1.5.0
 
