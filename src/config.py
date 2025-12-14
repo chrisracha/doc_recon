@@ -251,3 +251,4 @@ def get_device() -> str:
         return "cuda"
     return "cpu"
 
+

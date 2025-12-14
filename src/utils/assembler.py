@@ -228,7 +228,7 @@ class DocumentAssembler:
         output_dir: Optional[Union[str, Path]] = None,
         ocr_engine: str = "tesseract",
         math_engine: str = "pix2tex",
-        layout_method: str = "auto"
+        layout_method: str = "default"
     ):
         self.use_gpu = use_gpu
         self.debug_mode = debug_mode

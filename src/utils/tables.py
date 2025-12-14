@@ -728,3 +728,4 @@ if __name__ == "__main__":
     else:
         print("Usage: python tables.py <image_or_pdf_path>")
 
+

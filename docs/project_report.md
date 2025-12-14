@@ -394,3 +394,4 @@ The pipeline serves as a foundation that can be extended with domain-specific mo
 4. Shafait, F., et al. (2008). Document image denoising using spectral domains. *DRR 2008*.
 5. Shen, Z., et al. (2021). LayoutParser: A unified toolkit for deep learning based document image analysis. *ICDAR 2021*.
 
+

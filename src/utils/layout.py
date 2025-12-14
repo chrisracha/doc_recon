@@ -165,13 +165,13 @@ class LayoutDetector:
         confidence_threshold: float = 0.5,
         use_gpu: bool = False,
         fallback_to_classical: bool = True,
-        layout_method: Optional[str] = None  # "auto", "pix2text", "layoutparser", "paddleocr", "classical"
+        layout_method: Optional[str] = None  # "default", "pix2text", "layoutparser", "paddleocr", "classical"
     ):
         self.model_type = model_type
         self.confidence_threshold = confidence_threshold
         self.use_gpu = use_gpu
         self.fallback_to_classical = fallback_to_classical
-        self.layout_method = layout_method or "auto"
+        self.layout_method = layout_method or "default"
         self._detector = None
         self._method = None
         
@@ -180,7 +180,7 @@ class LayoutDetector:
     def _initialize_detector(self):
         """Try to initialize the specified or best available detector."""
         # If specific method requested, try only that
-        if self.layout_method != "auto":
+        if self.layout_method != "default":
             success = False
             if self.layout_method == "pix2text":
                 success = self._try_pix2text()

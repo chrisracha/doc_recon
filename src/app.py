@@ -252,7 +252,7 @@ def render_sidebar():
     
     # Display names mapping
     layout_options = {
-        "Auto": "auto",
+        "Default": "default",
         "Classical CV": "classical", 
         "LayoutParser": "layoutparser",
         "PaddleOCR": "paddleocr",
@@ -262,7 +262,7 @@ def render_sidebar():
         "Method",
         list(layout_options.keys()),
         index=0,
-        help="Method for detecting document structure (Auto = try best available)"
+        help="Method for detecting document structure (Default = tries best available)"
     )
     layout_method = layout_options[layout_display]
     
@@ -426,7 +426,7 @@ def process_document(uploaded_file, settings) -> Optional[dict]:
                     st.warning(f"⚠️ {actual_math_engine} not available, falling back to simple")
                     actual_math_engine = "simple"
             
-            layout_method = settings.get("layout_method", "auto")
+            layout_method = settings.get("layout_method", "default")
             st.info(f"🔧 Using: **{layout_method}** layout, **{actual_ocr_engine}** OCR, **{actual_math_engine}** math")
             
             assembler = DocumentAssembler(

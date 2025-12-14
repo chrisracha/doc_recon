@@ -123,9 +123,9 @@ Examples:
     
     parser.add_argument(
         "--layout-method",
-        choices=["auto", "classical", "layoutparser", "paddleocr", "pix2text"],
-        default="auto",
-        help="Layout detection method (default: auto - tries best available)"
+        choices=["default", "classical", "layoutparser", "paddleocr", "pix2text"],
+        default="default",
+        help="Layout detection method (default: tries best available)"
     )
     
     parser.add_argument(
