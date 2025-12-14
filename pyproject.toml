@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doc-recon"
+version = "1.0.0"
+description = "Document Reconstruction Pipeline - OCR and document structure extraction"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Document Reconstruction Team"}
+]
+keywords = ["ocr", "document", "pdf", "latex", "table-extraction"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Text Processing :: General",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python>=4.8.0",
+    "Pillow>=10.0.0",
+    "pytesseract>=0.3.10",
+    "pdf2image>=1.16.0",
+    "python-docx>=0.8.11",
+    "streamlit>=1.28.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "flake8>=6.1.0",
+    "mypy>=1.5.0",
+]
+full = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "pix2tex>=0.1.1",
+    "camelot-py[cv]>=0.11.0",
+    "transformers>=4.30.0",
+]
+
+[project.scripts]
+doc-recon = "src.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example/doc-recon"
+Documentation = "https://github.com/example/doc-recon#readme"
+Repository = "https://github.com/example/doc-recon"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.flake8]
+max-line-length = 100
+extend-ignore = ["E501", "W503"]
+exclude = [".git", "__pycache__", "build", "dist"]
+

@@ -1,0 +1,9 @@
+# Expected outputs directory
+# Add expected JSON outputs here for validation
+
+# These should match the sample pages and include:
+# - The expected document structure
+# - Expected text content
+# - Expected LaTeX for equations
+# - Expected table structure
+
