@@ -6,7 +6,7 @@ Run with:
     streamlit run src/app.py
 
 Features:
-- Upload PDF or image files
+- Upload image files (PNG, JPG, TIFF, BMP)
 - Real-time processing with progress indicator
 - Preview of extracted text, equations, and tables
 - Download results in multiple formats
@@ -238,14 +238,8 @@ def render_sidebar():
         help="Save debug images with bounding boxes"
     )
     
-    dpi = st.sidebar.slider(
-        "PDF DPI",
-        min_value=200,
-        max_value=600,
-        value=400,
-        step=50,
-        help="Higher DPI = better OCR accuracy but slower processing"
-    )
+    # DPI setting (hidden - used internally if PDF support added later)
+    dpi = 400
     
     # Layout detection options
     st.sidebar.subheader("Layout Detection")
@@ -897,9 +891,9 @@ def main():
     st.markdown("---")
     
     uploaded_file = st.file_uploader(
-        "Upload a document",
-        type=["pdf", "png", "jpg", "jpeg", "tiff", "bmp"],
-        help="Upload a PDF or image file to process"
+        "Upload a document image",
+        type=["png", "jpg", "jpeg", "tiff", "bmp"],
+        help="Upload an image file to process (PNG, JPG, TIFF, BMP)"
     )
     
     if uploaded_file:
