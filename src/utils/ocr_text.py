@@ -290,8 +290,14 @@ class TesseractEngine:
         self.language = language
         self.config = config
     
-    def _preprocess_for_ocr(self, image: np.ndarray) -> np.ndarray:
-        """Preprocess image for better OCR results."""
+    def _preprocess_for_ocr(self, image: np.ndarray, aggressive: bool = False) -> np.ndarray:
+        """Preprocess image for better OCR results.
+        
+        Args:
+            image: Input image
+            aggressive: If True, apply adaptive thresholding (for scanned docs).
+                       If False, minimal preprocessing (for clean PDFs/screenshots).
+        """
         import cv2
         
         # Convert to grayscale if needed
@@ -306,23 +312,51 @@ class TesseractEngine:
             scale = 30.0 / h
             gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         
-        # Apply adaptive thresholding for better text contrast
-        # This helps with scanned documents
-        gray = cv2.adaptiveThreshold(
-            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-        
-        # Denoise
-        gray = cv2.medianBlur(gray, 3)
+        # Only apply aggressive preprocessing for degraded/scanned documents
+        # Clean PDFs and screenshots should NOT be processed this way
+        if aggressive:
+            # Apply adaptive thresholding for better text contrast
+            # This helps with scanned documents but hurts clean PDFs
+            gray = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+            )
+            # Denoise
+            gray = cv2.medianBlur(gray, 3)
         
         return gray
+    
+    def _is_clean_image(self, image: np.ndarray) -> bool:
+        """Detect if image is clean (PDF/screenshot) vs degraded (scan).
+        
+        Clean images have sharp edges and high contrast.
+        Degraded images have noise and blurry text.
+        """
+        import cv2
+        
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image
+        
+        # Check sharpness using Laplacian variance
+        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
+        # High sharpness (>500) = clean image (PDFs typically have very high values)
+        # Low sharpness (<100) = likely scanned/degraded
+        # Adaptive thresholding hurts clean images but helps degraded ones
+        is_clean = laplacian_var > 500
+        
+        logger.debug(f"Image quality check: laplacian={laplacian_var:.1f}, clean={is_clean}")
+        return is_clean
     
     def recognize(self, image: np.ndarray) -> OCRResult:
         """Recognize text using Tesseract."""
         import cv2
         
-        # Preprocess image for better OCR
-        processed = self._preprocess_for_ocr(image)
+        # Auto-detect if image needs aggressive preprocessing
+        # Clean PDFs/screenshots should NOT have adaptive thresholding applied
+        aggressive = not self._is_clean_image(image)
+        processed = self._preprocess_for_ocr(image, aggressive=aggressive)
         
         # Get detailed data with confidence
         try:
