@@ -381,7 +381,6 @@ Key achievements:
 - Modular architecture allowing component replacement
 - Confidence-based quality assessment
 - Both CLI and web interfaces
-- Docker containerization for easy deployment
 
 The pipeline serves as a foundation that can be extended with domain-specific models and additional language support.
 

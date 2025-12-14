@@ -70,19 +70,6 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Using Docker (easiest)
-
-```bash
-# Build the image
-docker build -t doc-recon -f docker/Dockerfile .
-
-# Run the web UI
-docker run -p 8080:8080 doc-recon
-
-# Or use docker-compose
-docker-compose up
-```
-
 ## 📖 Usage
 
 ### Command Line Interface
@@ -155,9 +142,6 @@ print(f"Markdown:\n{document.markdown}")
 doc_recon/
 ├── README.md               # This file
 ├── requirements.txt        # Python dependencies
-├── docker/
-│   └── Dockerfile          # Docker build file
-├── docker-compose.yml      # Docker Compose config
 ├── src/
 │   ├── __init__.py
 │   ├── cli.py              # Command-line interface
