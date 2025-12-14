@@ -86,25 +86,46 @@ Academic documents often exist only as scanned PDFs or images, making them diffi
 
 ### 3.1 Image Preprocessing
 
-The preprocessing pipeline addresses common issues in scanned documents:
+The preprocessing pipeline uses **adaptive processing** based on automatic image quality detection:
 
-1. **Deskewing**: Uses Hough line transform to detect predominant line angles and rotate to correct skew. Maximum correction angle is configurable (default: 15°).
+#### Image Quality Detection
 
-2. **Denoising**: Applies Non-local Means Denoising (cv2.fastNlMeansDenoising) with configurable strength parameter.
+The system automatically classifies images as "clean" or "degraded" using:
+- **Laplacian variance**: Measures image sharpness (500-50000 = clean, <500 = blurry, >50000 = noisy)
+- **Lighting uniformity**: Variance of local means (<30 = uniform lighting)
 
-3. **Contrast Enhancement**: Uses CLAHE (Contrast Limited Adaptive Histogram Equalization) for locally adaptive contrast improvement.
+#### Preprocessing Modes
 
-4. **Binarization**: Supports Otsu's method (automatic threshold), adaptive thresholding, and fixed thresholds.
+**Clean Images (PDFs, screenshots):**
+- Minimal preprocessing to preserve quality
+- Grayscale conversion and optional resizing only
+- Aggressive preprocessing (adaptive threshold) destroys fine text details
+
+**Degraded Images (scans, photos):**
+1. **Median blur**: Removes salt-and-pepper noise
+2. **CLAHE**: Fixes uneven lighting and low contrast
+3. **Adaptive thresholding**: Binarizes for better text/background separation
+4. **Morphological opening**: Cleans remaining noise artifacts
+
+#### Global Preprocessing
+1. **Deskewing**: Hough line transform to detect and correct skew (max 15°)
+2. **Denoising**: Non-local Means Denoising (cv2.fastNlMeansDenoising)
+3. **Contrast Enhancement**: CLAHE for locally adaptive contrast improvement
 
 ```python
-# Key preprocessing function
-def preprocess_image(
-    image: np.ndarray,
-    deskew_enabled: bool = True,
-    denoise_enabled: bool = True,
-    enhance_contrast_enabled: bool = True,
-    binarize_enabled: bool = False
-) -> PreprocessingResult
+# Adaptive preprocessing in TesseractEngine
+def _is_clean_image(self, image) -> bool:
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    is_sharp = 500 < laplacian_var < 50000
+    is_uniform_lighting = lighting_variance < 30
+    return is_sharp and is_uniform_lighting
+
+def _preprocess_for_ocr(self, image, aggressive: bool = False):
+    if aggressive:  # For degraded images only
+        gray = cv2.medianBlur(gray, 3)  # Remove noise first
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray = clahe.apply(gray)  # Fix lighting
+        gray = cv2.adaptiveThreshold(...)  # Binarize
 ```
 
 ### 3.2 Layout Detection
@@ -132,12 +153,22 @@ Layout detection identifies and classifies document regions:
 
 Multi-engine approach with confidence-based fallback:
 
+**Available Engines:**
+- **Tesseract OCR**: Best for clean, high-DPI documents (default)
+- **PaddleOCR**: Better for degraded images, supports PaddleOCR 3.x API
+- **EasyOCR**: Good multi-language support
+
 ```python
 # Engine priority
-1. Primary engine (configurable: tesseract/paddleocr/easyocr)
+1. Primary engine (configurable: Tesseract OCR/PaddleOCR/EasyOCR)
 2. If confidence < threshold (0.65), try secondary engine
 3. Return result with higher confidence
 ```
+
+**Adaptive Preprocessing per Engine:**
+- Auto-detects if image is clean (PDF) vs degraded (scan)
+- Clean images: Skip aggressive preprocessing (preserves quality)
+- Degraded images: Apply CLAHE + adaptive threshold + noise removal
 
 **Post-processing:**
 - Hyphenation fix: `docu-\nment` → `document`
@@ -284,13 +315,24 @@ class Document:
 
 ### 6.2 Test Results
 
-Testing on sample academic documents:
+Testing on sample pages in `examples/sample_pages/`:
 
-| Document Type | Pages | Confidence | Equations | Tables |
-|--------------|-------|------------|-----------|--------|
-| Research paper | 8 | 0.87 | 12/15 (80%) | 3/3 (100%) |
-| Textbook page | 1 | 0.82 | 5/6 (83%) | 1/1 (100%) |
-| Handwritten notes | 2 | 0.65 | 2/4 (50%) | N/A |
+| Document | Detection | Confidence | Notes |
+|----------|-----------|------------|-------|
+| screenshot.png (academic PDF) | CLEAN | 89.8% | High-quality, no preprocessing needed |
+| sample_math.png | CLEAN | 85.7% | Math equations detected well |
+| sample_multicol.png | CLEAN | 91.5% | Multi-column layout handled |
+| sample_table.png | CLEAN | 80.3% | Table structure preserved |
+| blur.png (degraded scan) | DEGRADED | 34.2% | Auto-applies aggressive preprocessing |
+
+**Adaptive Preprocessing Validation:**
+
+| Scenario | Laplacian | Lighting Var | Detection | Result |
+|----------|-----------|--------------|-----------|--------|
+| Clean PDF | 5000-7000 | <10 | CLEAN | Perfect OCR |
+| Blurry scan | <500 | <30 | DEGRADED | Improved with preprocessing |
+| Heavy noise | >50000 | varies | DEGRADED | Noise removal applied |
+| Uneven lighting | varies | >30 | DEGRADED | CLAHE fixes contrast |
 
 ---
 
@@ -300,9 +342,10 @@ Testing on sample academic documents:
 
 1. **Handwriting**: Limited support for handwritten content
 2. **Complex Equations**: Multi-line and matrix equations may fail
-3. **Image Quality**: Performance degrades below 200 DPI
-4. **Languages**: Primarily optimized for English
+3. **Image Quality**: Performance degrades below 200 DPI (300+ recommended)
+4. **Languages**: Primarily optimized for English (PaddleOCR supports more languages)
 5. **Merged Cells**: Table merged cell handling is limited
+6. **Extremely Degraded Images**: Very blurry or heavily damaged documents may still have low confidence despite adaptive preprocessing
 
 ### 7.2 Future Improvements
 

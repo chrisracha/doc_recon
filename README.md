@@ -8,17 +8,21 @@ A modular, production-quality OCR and document reconstruction system that conver
 
 ## 🌟 Features
 
-- **PDF/Image Processing**: Convert PDFs to high-resolution images at 300-400 DPI
-- **Preprocessing Pipeline**: Deskew, denoise, binarize, and enhance contrast
+- **PDF/Image Processing**: Convert PDFs to high-resolution images at 300-600 DPI
+- **Adaptive Preprocessing Pipeline**: 
+  - Auto-detects image quality (clean PDF vs degraded scan)
+  - Clean images: Minimal preprocessing to preserve quality
+  - Degraded images: CLAHE, adaptive thresholding, noise removal
+  - Handles uneven lighting, salt-and-pepper noise, low contrast, blur
 - **Automatic Layout Detection**: 
   - **Pix2Text** (recommended): Automatic equation and table detection - free, open-source!
   - LayoutParser/PaddleOCR: Deep learning-based layout analysis
   - Classical CV: Fallback method using heuristics
-- **Text OCR**: Multi-engine support (Tesseract, PaddleOCR, EasyOCR) with confidence scoring
+- **Text OCR**: Multi-engine support (Tesseract OCR, PaddleOCR, EasyOCR) with confidence scoring
 - **Math/Equation OCR**: Convert equations to LaTeX using pix2tex (free) or Mathpix API (paid)
 - **Table Extraction**: Reconstruct tables to Markdown, HTML, CSV formats using Camelot and image-based detection
 - **Multi-format Export**: JSON, Markdown, DOCX, LaTeX, PDF outputs
-- **Web UI**: Interactive Streamlit interface with real-time engine status and processing feedback
+- **Web UI**: Clean Streamlit interface with engine status indicators and processing feedback
 
 ## 📋 Requirements
 
@@ -346,9 +350,14 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 ```
 
 **Low OCR accuracy**
-- Ensure input images are at least 300 DPI
-- Enable preprocessing (deskew, denoise)
-- Try different OCR engines (PaddleOCR often works better on degraded images)
+- Ensure input images are at least 300 DPI (400+ recommended for academic docs)
+- The system auto-detects image quality and applies appropriate preprocessing:
+  - Clean PDFs/screenshots: Minimal processing (aggressive preprocessing hurts clean images)
+  - Degraded scans: CLAHE + adaptive threshold + noise removal
+- Try different OCR engines:
+  - Tesseract OCR: Best for clean, high-DPI academic documents
+  - PaddleOCR: Better for degraded images and non-English text
+  - EasyOCR: Good multi-language support
 
 ## 🤝 Contributing
 
