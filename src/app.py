@@ -147,63 +147,73 @@ def check_engine_availability():
     try:
         import pytesseract
         pytesseract.get_tesseract_version()
-        engines["tesseract"] = {"available": True, "status": "✅ Ready"}
+        engines["tesseract"] = {"available": True, "error": None}
     except Exception as e:
-        engines["tesseract"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
+        engines["tesseract"] = {"available": False, "error": str(e)[:50]}
     
     # Check EasyOCR
     try:
         import easyocr
-        engines["easyocr"] = {"available": True, "status": "✅ Ready"}
+        engines["easyocr"] = {"available": True, "error": None}
     except ImportError:
-        engines["easyocr"] = {"available": False, "status": "❌ Not installed (pip install easyocr)"}
+        engines["easyocr"] = {"available": False, "error": "pip install easyocr"}
     
     # Check PaddleOCR
     try:
         from paddleocr import PaddleOCR
-        engines["paddleocr"] = {"available": True, "status": "✅ Ready"}
+        engines["paddleocr"] = {"available": True, "error": None}
     except ImportError:
-        engines["paddleocr"] = {"available": False, "status": "❌ Not installed (pip install paddleocr)"}
+        engines["paddleocr"] = {"available": False, "error": "pip install paddleocr"}
     except Exception as e:
-        engines["paddleocr"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
+        engines["paddleocr"] = {"available": False, "error": str(e)[:50]}
     
     # Check pix2tex (Math OCR)
     try:
         from pix2tex.cli import LatexOCR
-        # Try to actually initialize it to catch compatibility errors
         try:
             _ = LatexOCR()
-            engines["pix2tex"] = {"available": True, "status": "✅ Ready"}
+            engines["pix2tex"] = {"available": True, "error": None}
         except (ValueError, RuntimeError) as e:
             if "std_range" in str(e) or "albumentations" in str(e).lower():
-                engines["pix2tex"] = {
-                    "available": False, 
-                    "status": "❌ Compatibility error - install: pip install 'albumentations<1.4.0'"
-                }
+                engines["pix2tex"] = {"available": False, "error": "pip install 'albumentations<1.4.0'"}
             else:
-                engines["pix2tex"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
+                engines["pix2tex"] = {"available": False, "error": str(e)[:50]}
     except ImportError:
-        engines["pix2tex"] = {"available": False, "status": "❌ Not installed (pip install pix2tex)"}
+        engines["pix2tex"] = {"available": False, "error": "pip install pix2tex"}
     except Exception as e:
-        engines["pix2tex"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
+        engines["pix2tex"] = {"available": False, "error": str(e)[:50]}
     
-    # Check Pix2Text (automatic equation/table detection)
+    # Check Pix2Text (layout detection)
     try:
         from pix2text import Pix2Text
-        engines["pix2text"] = {"available": True, "status": "✅ Ready (auto equation/table detection)"}
+        engines["pix2text"] = {"available": True, "error": None}
     except ImportError:
-        engines["pix2text"] = {"available": False, "status": "❌ Not installed (pip install pix2text)"}
+        engines["pix2text"] = {"available": False, "error": "pip install pix2text"}
     except Exception as e:
-        engines["pix2text"] = {"available": False, "status": f"❌ {str(e)[:50]}"}
+        engines["pix2text"] = {"available": False, "error": str(e)[:50]}
     
     # Check LayoutParser
     try:
         import layoutparser
-        engines["layoutparser"] = {"available": True, "status": "✅ Ready"}
+        engines["layoutparser"] = {"available": True, "error": None}
     except ImportError:
-        engines["layoutparser"] = {"available": False, "status": "⚠️ Using classical CV fallback"}
+        engines["layoutparser"] = {"available": False, "error": "Using classical CV fallback"}
     
     return engines
+
+
+def render_engine_status_row(name: str, available: bool, error: str = None):
+    """Render a single engine status row with colored indicator."""
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown(f"**{name}**")
+        if not available and error:
+            st.caption(f"{error}")
+    with col2:
+        if available:
+            st.markdown("<div style='text-align:right'><span style='color:#22c55e;font-size:20px'>●</span></div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='text-align:right'><span style='color:#ef4444;font-size:20px'>●</span></div>", unsafe_allow_html=True)
 
 
 def render_sidebar():
@@ -240,71 +250,65 @@ def render_sidebar():
     # Layout detection options
     st.sidebar.subheader("Layout Detection")
     
-    layout_method = st.sidebar.selectbox(
-        "Layout Method",
-        ["auto", "classical", "layoutparser", "paddleocr", "pix2text"],
+    # Display names mapping
+    layout_options = {
+        "Auto": "auto",
+        "Classical CV": "classical", 
+        "LayoutParser": "layoutparser",
+        "PaddleOCR": "paddleocr",
+        "Pix2Text": "pix2text"
+    }
+    layout_display = st.sidebar.selectbox(
+        "Method",
+        list(layout_options.keys()),
         index=0,
-        help="Method for detecting document structure (auto = try best available)"
+        help="Method for detecting document structure (Auto = try best available)"
     )
+    layout_method = layout_options[layout_display]
     
-    # Show status for layout methods
-    if layout_method == "auto":
-        st.sidebar.info("Auto: Will try best available method")
-    elif layout_method == "classical":
-        st.sidebar.success("Classical CV: ✅ Always available")
-    elif layout_method == "pix2text":
-        if engines.get("pix2text", {}).get("available"):
-            st.sidebar.success("Pix2Text: ✅ Ready")
-        else:
-            st.sidebar.error("Pix2Text: ❌ Not available")
-            st.sidebar.warning("Will fall back to classical")
-    elif layout_method == "layoutparser":
-        if engines.get("layoutparser", {}).get("available"):
-            st.sidebar.success("LayoutParser: ✅ Ready")
-        else:
-            st.sidebar.error("LayoutParser: ❌ Not available")
-            st.sidebar.warning("Will fall back to classical")
-    elif layout_method == "paddleocr":
-        if engines.get("paddleocr", {}).get("available"):
-            st.sidebar.success("PaddleOCR: ✅ Ready")
-        else:
-            st.sidebar.error("PaddleOCR: ❌ Not available")
-            st.sidebar.warning("Will fall back to classical")
+    # Only show warning if selected method is unavailable
+    if layout_method == "pix2text" and not engines.get("pix2text", {}).get("available"):
+        st.sidebar.warning("Pix2Text unavailable, will fall back to Classical CV")
+    elif layout_method == "layoutparser" and not engines.get("layoutparser", {}).get("available"):
+        st.sidebar.warning("LayoutParser unavailable, will fall back to Classical CV")
+    elif layout_method == "paddleocr" and not engines.get("paddleocr", {}).get("available"):
+        st.sidebar.warning("PaddleOCR unavailable, will fall back to Classical CV")
     
     # OCR options
     st.sidebar.subheader("OCR Engine")
     
-    ocr_engine = st.sidebar.selectbox(
+    ocr_options = {
+        "Tesseract OCR": "tesseract",
+        "EasyOCR": "easyocr",
+        "PaddleOCR": "paddleocr"
+    }
+    ocr_display = st.sidebar.selectbox(
         "Text OCR",
-        ["tesseract", "easyocr", "paddleocr"],
+        list(ocr_options.keys()),
         index=0,
         help="Primary OCR engine for text extraction"
     )
+    ocr_engine = ocr_options[ocr_display]
     
-    # Show status for selected OCR engine
-    if ocr_engine in engines:
-        status = engines[ocr_engine]
-        if status["available"]:
-            st.sidebar.success(f"{ocr_engine}: {status['status']}")
-        else:
-            st.sidebar.error(f"{ocr_engine}: {status['status']}")
-            st.sidebar.warning("⚠️ Will fall back to tesseract")
+    # Only show warning if selected engine is unavailable
+    if ocr_engine in engines and not engines[ocr_engine]["available"]:
+        st.sidebar.warning(f"{ocr_display} unavailable, will fall back to Tesseract OCR")
     
-    math_engine = st.sidebar.selectbox(
+    math_options = {
+        "pix2tex (LaTeX OCR)": "pix2tex",
+        "Simple (Text-based)": "simple"
+    }
+    math_display = st.sidebar.selectbox(
         "Math OCR",
-        ["pix2tex", "simple"],
+        list(math_options.keys()),
         index=0,
         help="Engine for equation recognition"
     )
+    math_engine = math_options[math_display]
     
-    # Show status for math engine
-    if math_engine in engines:
-        status = engines[math_engine]
-        if status["available"]:
-            st.sidebar.success(f"{math_engine}: {status['status']}")
-        else:
-            st.sidebar.error(f"{math_engine}: {status['status']}")
-            st.sidebar.warning("⚠️ Will fall back to simple text-based recognition")
+    # Only show warning if selected engine is unavailable
+    if math_engine in engines and not engines[math_engine]["available"]:
+        st.sidebar.warning("pix2tex unavailable, will fall back to Simple recognition")
     
     confidence_threshold = st.sidebar.slider(
         "Confidence Threshold",
@@ -316,35 +320,30 @@ def render_sidebar():
     )
     
     # Engine Status Overview
-    with st.sidebar.expander("🔧 Engine Status", expanded=False):
-        st.markdown("**Layout Detection (Auto Equation/Table):**")
-        if engines.get("pix2text", {}).get("available"):
-            st.success(f"✨ Pix2Text: {engines['pix2text']['status']}")
-            st.caption("Best for automatic equation & table detection!")
-        else:
-            st.info(engines.get("pix2text", {}).get("status", "❌ Not installed"))
-            st.caption("Install: pip install pix2text")
+    with st.sidebar.expander("Engine Status", expanded=False):
+        st.markdown("**Layout Detection**")
+        st.divider()
+        render_engine_status_row("Pix2Text", engines.get("pix2text", {}).get("available", False), engines.get("pix2text", {}).get("error"))
+        st.divider()
+        render_engine_status_row("LayoutParser", engines.get("layoutparser", {}).get("available", False), engines.get("layoutparser", {}).get("error"))
+        st.divider()
         
-        if engines.get("layoutparser", {}).get("available"):
-            st.markdown(f"LayoutParser: {engines['layoutparser']['status']}")
-        else:
-            st.markdown(engines.get("layoutparser", {}).get("status", "❌ Not available"))
+        st.markdown("**Text OCR**")
+        st.divider()
+        for eng in ["Tesseract", "EasyOCR", "PaddleOCR"]:
+            eng_key = eng.lower()
+            render_engine_status_row(eng, engines.get(eng_key, {}).get("available", False), engines.get(eng_key, {}).get("error"))
+            st.divider()
         
-        st.markdown("**Text OCR Engines:**")
-        for eng in ["tesseract", "easyocr", "paddleocr"]:
-            if eng in engines:
-                st.markdown(f"- {eng}: {engines[eng]['status']}")
-        
-        st.markdown("**Math OCR:**")
-        for eng in ["pix2tex"]:
-            if eng in engines:
-                st.markdown(f"- {eng}: {engines[eng]['status']}")
+        st.markdown("**Math OCR**")
+        st.divider()
+        render_engine_status_row("pix2tex", engines.get("pix2tex", {}).get("available", False), engines.get("pix2tex", {}).get("error"))
     
     # Export options
     st.sidebar.subheader("Export")
     
     export_formats = st.sidebar.multiselect(
-        "Export Formats",
+        "Formats",
         ["JSON", "Markdown", "DOCX", "LaTeX"],
         default=["JSON", "Markdown"],
         help="Output formats to generate"
