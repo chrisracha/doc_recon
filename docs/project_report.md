@@ -349,14 +349,35 @@ class Document:
 
 | CLO | Description | Implementation |
 |-----|-------------|----------------|
-| 1 | Understanding digital image fundamentals | Image loading, color space conversion, DPI handling |
-| 2 | Image enhancement techniques | CLAHE contrast enhancement, denoising, binarization |
-| 3 | Geometric transformations | Deskewing via rotation matrix transformation |
-| 4 | Morphological operations | Table line detection, text block grouping |
-| 5 | Edge and contour detection | Layout detection fallback, table grid detection |
-| 6 | Image segmentation | Block extraction, cell segmentation |
-| 7 | Feature extraction | OCR region features, equation boundary detection |
-| 8 | Pattern recognition | Text recognition, layout classification |
+| **CLO 1** | Discuss the concepts in image and video processing | Understanding of digital image representation, color spaces (BGR, grayscale), image coordinates, bounding boxes, pixel intensity, and image quality metrics (Laplacian variance, contrast) |
+| **CLO 2** | Discuss the techniques in image and video enhancement, recovery, and compression | CLAHE contrast enhancement, adaptive thresholding, denoising (Non-local Means), deskewing, morphological operations, binarization (Otsu's method), and image quality detection |
+| **CLO 3** | Demonstrate the skills of designing and implementing image and video processing techniques using a high-level programming language | Full Python implementation using OpenCV, NumPy, and scikit-image for preprocessing pipeline, layout detection, table extraction, and OCR integration |
+
+### Detailed CLO Mapping
+
+**CLO 1 - Image Processing Concepts:**
+- Image representation as NumPy arrays (height × width × channels)
+- Color space conversion (BGR ↔ Grayscale ↔ LAB)
+- Bounding box coordinates for region detection
+- Image statistics (mean intensity, standard deviation)
+- Sharpness measurement via Laplacian variance
+- DPI and resolution concepts
+
+**CLO 2 - Enhancement and Recovery Techniques:**
+- **CLAHE**: Contrast Limited Adaptive Histogram Equalization for local contrast enhancement
+- **Denoising**: Non-local Means Denoising (`cv2.fastNlMeansDenoising`)
+- **Binarization**: Otsu's automatic thresholding, adaptive thresholding
+- **Deskewing**: Hough line transform + rotation matrix transformation
+- **Morphological operations**: Dilation, erosion, opening for text block grouping
+- **Edge detection**: Canny edge detection for line finding
+
+**CLO 3 - Implementation Skills:**
+- Python with OpenCV (`cv2`) for all image processing operations
+- Modular architecture with separate modules for preprocessing, layout, OCR, tables
+- Integration of multiple OCR engines (Tesseract, PaddleOCR, EasyOCR)
+- Web interface using Streamlit for interactive demonstration
+- Command-line interface for batch processing
+- Comprehensive test suite using pytest
 
 ---
 
