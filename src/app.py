@@ -720,7 +720,7 @@ def generate_pdf_bytes(document: dict) -> bytes:
         if in_table and table_rows:
             _render_pdf_table(pdf, table_rows)
         
-        return pdf.output()
+        return bytes(pdf.output())
         
     except ImportError:
         pass
