@@ -628,6 +628,9 @@ class DocumentAssembler:
                 processed.text = ocr_result.text
                 processed.confidence = ocr_result.confidence
                 processed.alternatives = ocr_result.alternatives
+                # Store OCR metadata including engine fallback info
+                if ocr_result.metadata:
+                    processed.metadata["ocr"] = ocr_result.metadata
             except Exception as e:
                 logger.error(f"Text OCR error: {e}")
                 processed.text = ""

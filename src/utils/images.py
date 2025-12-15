@@ -410,8 +410,8 @@ def preprocess_image(
     binarize_enabled: bool = False,
     enhance_contrast_enabled: bool = True,
     remove_borders_enabled: bool = False,
-    denoise_strength: int = 10,
-    contrast_clip_limit: float = 2.0,
+    denoise_strength: int = 5,  # Reduced from 10
+    contrast_clip_limit: float = 3.0,  # Increased from 2.0 for better enhancement
     contrast_grid_size: int = 8,
     max_deskew_angle: float = 15.0,
     binarize_method: str = "otsu",
@@ -420,6 +420,8 @@ def preprocess_image(
     """
     Apply full preprocessing pipeline to an image.
     
+    Uses adaptive preprocessing based on image quality detection.
+    
     Args:
         image: Input image (BGR or grayscale)
         deskew_enabled: Whether to correct skew
@@ -427,8 +429,8 @@ def preprocess_image(
         binarize_enabled: Whether to binarize (usually False for OCR)
         enhance_contrast_enabled: Whether to enhance contrast
         remove_borders_enabled: Whether to remove dark borders
-        denoise_strength: Denoising filter strength
-        contrast_clip_limit: CLAHE clip limit
+        denoise_strength: Denoising filter strength (lower = less blur)
+        contrast_clip_limit: CLAHE clip limit (higher = more contrast)
         contrast_grid_size: CLAHE grid size
         max_deskew_angle: Maximum deskew angle
         binarize_method: Binarization method if enabled
@@ -437,10 +439,25 @@ def preprocess_image(
     Returns:
         PreprocessingResult with processed image and metadata
     """
+    import cv2
+    
     original_shape = image.shape[:2]
     processed = image.copy()
     transformations = []
     deskew_angle = 0.0
+    
+    # Analyze image quality first
+    gray = to_grayscale(image)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    std_intensity = float(np.std(gray))
+    
+    # Determine if image needs specific processing
+    is_low_contrast = std_intensity < 30  # Low contrast image
+    is_noisy = laplacian_var > 5000  # Very high variance = noisy
+    is_blurry = laplacian_var < 100  # Very low variance = blurry
+    
+    logger.info(f"Image analysis: std={std_intensity:.1f}, laplacian={laplacian_var:.1f}, "
+                f"low_contrast={is_low_contrast}, noisy={is_noisy}, blurry={is_blurry}")
     
     # 1. Remove borders if enabled
     if remove_borders_enabled:
@@ -458,13 +475,24 @@ def preprocess_image(
         if abs(deskew_angle) > 0.5:
             transformations.append(f"deskew_{deskew_angle:.1f}deg")
     
-    # 4. Denoise
-    if denoise_enabled:
+    # 4. Enhance contrast FIRST for low contrast images (before denoising)
+    if enhance_contrast_enabled and is_low_contrast:
+        # Use stronger CLAHE for low contrast
+        processed = enhance_contrast(
+            processed,
+            clip_limit=contrast_clip_limit * 1.5,  # Stronger for low contrast
+            grid_size=contrast_grid_size
+        )
+        transformations.append("enhance_contrast_strong")
+    
+    # 5. Denoise - only if actually noisy, and use gentle settings
+    if denoise_enabled and is_noisy and not is_low_contrast:
+        # Only denoise if image is actually noisy, not just low contrast
         processed = denoise(processed, strength=denoise_strength)
         transformations.append("denoise")
     
-    # 5. Enhance contrast
-    if enhance_contrast_enabled:
+    # 6. Enhance contrast for normal images (if not already done)
+    if enhance_contrast_enabled and not is_low_contrast:
         processed = enhance_contrast(
             processed,
             clip_limit=contrast_clip_limit,
@@ -472,7 +500,7 @@ def preprocess_image(
         )
         transformations.append("enhance_contrast")
     
-    # 6. Binarize (usually last if enabled)
+    # 7. Binarize (usually last if enabled)
     if binarize_enabled:
         processed = binarize(processed, method=binarize_method)
         transformations.append(f"binarize_{binarize_method}")

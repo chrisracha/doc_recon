@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 Streamlit Web UI for the Document Reconstruction Pipeline.
 
@@ -435,6 +435,7 @@ def process_document(uploaded_file, settings) -> Optional[dict]:
             # Process document with progress updates
             total_pages = len(images)
             pages = []
+            preprocessed_images = []
             
             for i, image in enumerate(images):
                 progress_bar.progress(
@@ -442,12 +443,30 @@ def process_document(uploaded_file, settings) -> Optional[dict]:
                     text=f"Processing page {i+1}/{total_pages}..."
                 )
                 
+                # Store preprocessed image for preview
+                from utils.images import preprocess_image
+                preprocess_result = preprocess_image(
+                    image,
+                    deskew_enabled=True,
+                    denoise_enabled=True,
+                    enhance_contrast_enabled=True
+                )
+                preprocessed_images.append({
+                    "image": preprocess_result.image,
+                    "original": image,
+                    "deskew_angle": preprocess_result.deskew_angle,
+                    "transformations": preprocess_result.transformations
+                })
+                
                 page = assembler.process_page(
                     image,
                     page_number=i+1,
                     pdf_path=pdf_path
                 )
                 pages.append(page)
+            
+            # Store preprocessed images in session state
+            st.session_state.preprocessed_images = preprocessed_images
             
             progress_bar.progress(80, text="Assembling document...")
             
@@ -483,6 +502,48 @@ def process_document(uploaded_file, settings) -> Optional[dict]:
         if settings.get("debug_mode"):
             st.code(traceback.format_exc())
         return None
+
+
+def check_engine_fallbacks(document: dict) -> list:
+    """Check if any blocks used fallback engines and return warnings."""
+    fallbacks = []
+    
+    for page in document.get("pages", []):
+        for block in page.get("blocks", []):
+            ocr_meta = block.get("metadata", {}).get("ocr", {})
+            if ocr_meta.get("used_secondary"):
+                fallback_info = {
+                    "block_type": block.get("type", "unknown"),
+                    "primary_engine": ocr_meta.get("primary_engine", "unknown"),
+                    "secondary_engine": ocr_meta.get("secondary_engine", "unknown"),
+                    "primary_confidence": ocr_meta.get("primary_confidence", 0),
+                    "final_confidence": block.get("confidence", 0),
+                    "threshold": ocr_meta.get("confidence_threshold", 0.65),
+                    "reason": ocr_meta.get("reason", "")
+                }
+                fallbacks.append(fallback_info)
+    
+    return fallbacks
+
+
+def render_engine_fallback_notices(document: dict):
+    """Display notices about engine fallbacks if any occurred."""
+    fallbacks = check_engine_fallbacks(document)
+    
+    if fallbacks:
+        with st.expander(f"⚠️ Engine Fallback Notices ({len(fallbacks)} blocks)", expanded=False):
+            st.warning(
+                f"**{len(fallbacks)} block(s)** used a fallback OCR engine because the primary engine "
+                f"did not meet the confidence threshold."
+            )
+            
+            for i, fb in enumerate(fallbacks, 1):
+                st.markdown(
+                    f"**Block {i}** ({fb['block_type']}): "
+                    f"`{fb['primary_engine']}` → `{fb['secondary_engine']}` | "
+                    f"Primary confidence: {fb['primary_confidence']:.0%} (threshold: {fb['threshold']:.0%}) | "
+                    f"Final confidence: {fb['final_confidence']:.0%}"
+                )
 
 
 def render_metrics(metrics: dict):
@@ -562,6 +623,226 @@ def render_page_content(page: dict):
         elif block.get("figure_path"):
             st.caption(f"🖼️ **Figure** (confidence: {confidence:.0%})")
             st.image(block.get("figure_path"), use_container_width=True)
+
+
+def render_bounding_box_preview(document: dict, image_bytes: bytes):
+    """Render the original image with detected bounding boxes overlaid."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+    import io
+    
+    # Color map for different block types
+    BLOCK_COLORS = {
+        "title": (255, 0, 0),       # Blue
+        "heading": (255, 128, 0),   # Orange-blue
+        "paragraph": (0, 255, 0),   # Green
+        "text": (0, 255, 0),        # Green
+        "equation_block": (0, 0, 255),   # Red
+        "equation_inline": (128, 0, 255), # Purple
+        "table": (255, 255, 0),     # Cyan
+        "figure": (255, 0, 255),    # Magenta
+        "caption": (128, 128, 0),   # Teal
+        "list": (0, 128, 255),      # Orange
+        "header": (128, 128, 128),  # Gray
+        "footer": (128, 128, 128),  # Gray
+        "unknown": (200, 200, 200), # Light gray
+    }
+    
+    pages = document.get("pages", [])
+    if not pages:
+        st.info("No pages to display")
+        return
+    
+    # Load the original image from bytes
+    try:
+        pil_image = Image.open(io.BytesIO(image_bytes))
+        image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+    except Exception as e:
+        st.error(f"Could not load image for preview: {e}")
+        return
+    
+    # Page selector for multi-page (though images are single page)
+    page_idx = 0
+    if len(pages) > 1:
+        page_idx = st.selectbox(
+            "Select page for preview",
+            range(len(pages)),
+            format_func=lambda x: f"Page {x + 1}",
+            key="bbox_page_select"
+        ) or 0
+    
+    page = pages[page_idx]
+    blocks = page.get("blocks", [])
+    
+    if not blocks:
+        st.info("No blocks detected on this page")
+        st.image(pil_image, caption="Original Image", use_container_width=True)
+        return
+    
+    # Filter options
+    st.markdown("**Filter block types:**")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    all_types = list(set(b.get("type", "unknown") for b in blocks))
+    selected_types = []
+    
+    with col1:
+        if st.checkbox("Text/Paragraphs", value=True, key="show_text"):
+            selected_types.extend(["paragraph", "text", "title", "heading"])
+    with col2:
+        if st.checkbox("Equations", value=True, key="show_eq"):
+            selected_types.extend(["equation_block", "equation_inline"])
+    with col3:
+        if st.checkbox("Tables", value=True, key="show_table"):
+            selected_types.append("table")
+    with col4:
+        if st.checkbox("Other", value=True, key="show_other"):
+            selected_types.extend(["figure", "caption", "list", "header", "footer", "unknown"])
+    
+    # Draw bounding boxes
+    preview_image = image.copy()
+    
+    for block in blocks:
+        block_type = block.get("type", "unknown")
+        if block_type not in selected_types:
+            continue
+            
+        bbox = block.get("bbox", {})
+        if not bbox:
+            continue
+        
+        x1 = int(bbox.get("x1", 0))
+        y1 = int(bbox.get("y1", 0))
+        x2 = int(bbox.get("x2", 0))
+        y2 = int(bbox.get("y2", 0))
+        
+        if x2 <= x1 or y2 <= y1:
+            continue
+        
+        color = BLOCK_COLORS.get(block_type, (200, 200, 200))
+        confidence = block.get("confidence", 0)
+        
+        # Draw rectangle
+        cv2.rectangle(preview_image, (x1, y1), (x2, y2), color, 2)
+        
+        # Draw label background
+        label = f"{block_type} ({confidence:.0%})"
+        (label_w, label_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(preview_image, (x1, y1 - label_h - 8), (x1 + label_w + 4, y1), color, -1)
+        
+        # Draw label text
+        cv2.putText(preview_image, label, (x1 + 2, y1 - 4), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    # Convert back to RGB for display
+    preview_rgb = cv2.cvtColor(preview_image, cv2.COLOR_BGR2RGB)
+    
+    # Display
+    st.image(preview_rgb, caption="Detected Bounding Boxes", use_container_width=True)
+    
+    # Legend
+    st.markdown("**Legend:**")
+    legend_cols = st.columns(4)
+    type_list = list(BLOCK_COLORS.keys())
+    for i, block_type in enumerate(type_list[:8]):  # Show first 8
+        color = BLOCK_COLORS[block_type]
+        # Convert BGR to hex
+        hex_color = "#{:02x}{:02x}{:02x}".format(color[2], color[1], color[0])
+        with legend_cols[i % 4]:
+            st.markdown(f"<span style='color:{hex_color}'>■</span> {block_type}", unsafe_allow_html=True)
+    
+    # Block count summary
+    block_counts = {}
+    for b in blocks:
+        t = b.get("type", "unknown")
+        block_counts[t] = block_counts.get(t, 0) + 1
+    
+    st.markdown("**Detected blocks:**")
+    st.write(" | ".join([f"{t}: {c}" for t, c in sorted(block_counts.items())]))
+
+
+def render_preprocessed_preview():
+    """Render side-by-side comparison of original vs preprocessed image."""
+    import cv2
+    import numpy as np
+    
+    preprocessed_data = st.session_state.get("preprocessed_images", [])
+    
+    if not preprocessed_data:
+        st.info("No preprocessed images available. Process a document first.")
+        return
+    
+    # Page selector
+    page_idx = 0
+    if len(preprocessed_data) > 1:
+        page_idx = st.selectbox(
+            "Select page",
+            range(len(preprocessed_data)),
+            format_func=lambda x: f"Page {x + 1}",
+            key="preprocess_page_select"
+        ) or 0
+    
+    data = preprocessed_data[page_idx]
+    original = data["original"]
+    preprocessed = data["image"]
+    deskew_angle = data.get("deskew_angle", 0)
+    transformations = data.get("transformations", [])
+    
+    # Display info
+    st.markdown("**Preprocessing Applied:**")
+    if transformations:
+        st.write(" → ".join(transformations))
+    else:
+        st.write("No transformations applied (clean image detected)")
+    
+    if abs(deskew_angle) > 0.1:
+        st.write(f"Deskew angle: **{deskew_angle:.2f}°**")
+    
+    # Convert images to RGB for display
+    if len(original.shape) == 3:
+        original_rgb = cv2.cvtColor(original, cv2.COLOR_BGR2RGB)
+    else:
+        original_rgb = cv2.cvtColor(original, cv2.COLOR_GRAY2RGB)
+    
+    if len(preprocessed.shape) == 3:
+        preprocessed_rgb = cv2.cvtColor(preprocessed, cv2.COLOR_BGR2RGB)
+    else:
+        preprocessed_rgb = cv2.cvtColor(preprocessed, cv2.COLOR_GRAY2RGB)
+    
+    # Display side by side
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Original Image**")
+        st.image(original_rgb, use_container_width=True)
+        st.caption(f"Size: {original.shape[1]}×{original.shape[0]}")
+    
+    with col2:
+        st.markdown("**Preprocessed Image**")
+        st.image(preprocessed_rgb, use_container_width=True)
+        st.caption(f"Size: {preprocessed.shape[1]}×{preprocessed.shape[0]}")
+    
+    # Image statistics
+    with st.expander("Image Statistics"):
+        col1, col2 = st.columns(2)
+        
+        orig_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY) if len(original.shape) == 3 else original
+        prep_gray = cv2.cvtColor(preprocessed, cv2.COLOR_BGR2GRAY) if len(preprocessed.shape) == 3 else preprocessed
+        
+        with col1:
+            st.markdown("**Original:**")
+            st.write(f"- Mean intensity: {np.mean(orig_gray):.1f}")
+            st.write(f"- Std deviation: {np.std(orig_gray):.1f}")
+            laplacian_var = cv2.Laplacian(orig_gray, cv2.CV_64F).var()
+            st.write(f"- Sharpness (Laplacian): {laplacian_var:.1f}")
+        
+        with col2:
+            st.markdown("**Preprocessed:**")
+            st.write(f"- Mean intensity: {np.mean(prep_gray):.1f}")
+            st.write(f"- Std deviation: {np.std(prep_gray):.1f}")
+            laplacian_var = cv2.Laplacian(prep_gray, cv2.CV_64F).var()
+            st.write(f"- Sharpness (Laplacian): {laplacian_var:.1f}")
 
 
 def generate_docx_bytes(document: dict) -> bytes:
@@ -916,6 +1197,9 @@ def main():
                 if result:
                     # Convert numpy types to native Python types for JSON compatibility
                     st.session_state.document = convert_numpy_types(result)
+                    # Store image bytes for bounding box preview
+                    uploaded_file.seek(0)
+                    st.session_state.uploaded_image_bytes = uploaded_file.read()
                     st.success("✅ Document processed successfully!")
     
     # Display results
@@ -928,10 +1212,13 @@ def main():
         st.subheader("📊 Processing Metrics")
         render_metrics(doc.get("metrics", {}))
         
+        # Engine fallback notices
+        render_engine_fallback_notices(doc)
+        
         st.markdown("---")
         
         # Content tabs
-        tabs = st.tabs(["📖 Content", "📝 Markdown", "📄 Raw JSON"])
+        tabs = st.tabs(["Content", "Bounding Boxes", "Preprocessed", "Markdown", "Raw JSON"])
         
         with tabs[0]:
             pages = doc.get("pages", [])
@@ -948,13 +1235,24 @@ def main():
                 st.info("No content extracted")
         
         with tabs[1]:
+            # Bounding box preview
+            if st.session_state.get("uploaded_image_bytes"):
+                render_bounding_box_preview(doc, st.session_state.uploaded_image_bytes)
+            else:
+                st.info("Upload and process an image to see bounding box preview")
+        
+        with tabs[2]:
+            # Preprocessed image preview
+            render_preprocessed_preview()
+        
+        with tabs[3]:
             markdown = doc.get("markdown", "")
             if markdown:
                 st.code(markdown, language="markdown")
             else:
                 st.info("No markdown content")
         
-        with tabs[2]:
+        with tabs[4]:
             st.json(convert_numpy_types(doc))
         
         st.markdown("---")
@@ -977,4 +1275,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

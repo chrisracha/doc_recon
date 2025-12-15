@@ -152,6 +152,9 @@ class TextOCR:
         """
         # Run primary engine
         primary_result = self._engines[self.primary_engine].recognize(image)
+        primary_result.metadata["engine_used"] = self.primary_engine
+        primary_result.metadata["primary_engine"] = self.primary_engine
+        primary_result.metadata["primary_confidence"] = primary_result.confidence
         
         # If confidence is low and secondary engine is available, try it
         if (use_secondary and 
@@ -163,8 +166,18 @@ class TextOCR:
             # Use whichever has higher confidence
             if secondary_result.confidence > primary_result.confidence:
                 primary_result.alternatives.append(primary_result.text)
+                fallback_info = {
+                    "used_secondary": True,
+                    "engine_used": self.secondary_engine,
+                    "primary_engine": self.primary_engine,
+                    "secondary_engine": self.secondary_engine,
+                    "primary_confidence": primary_result.metadata["primary_confidence"],
+                    "secondary_confidence": secondary_result.confidence,
+                    "confidence_threshold": self.confidence_threshold,
+                    "reason": f"Primary engine '{self.primary_engine}' confidence ({primary_result.metadata['primary_confidence']:.2f}) was below threshold ({self.confidence_threshold:.2f})"
+                }
                 primary_result = secondary_result
-                primary_result.metadata["used_secondary"] = True
+                primary_result.metadata.update(fallback_info)
         
         # Post-processing
         primary_result.raw_text = primary_result.text
