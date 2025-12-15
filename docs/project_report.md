@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This project implements a comprehensive document reconstruction pipeline that converts scanned academic documents (PDFs and images) into structured, editable formats. The system employs a modular architecture combining classical computer vision techniques with modern deep learning approaches for layout detection, text recognition, equation parsing, and table extraction.
+This project implements a comprehensive document reconstruction pipeline that converts scanned academic documents (images) into structured, editable formats. The system employs a modular architecture combining classical computer vision techniques with modern deep learning approaches for layout detection, text recognition, equation parsing, and table extraction.
 
 ---
 
@@ -16,7 +16,7 @@ This project implements a comprehensive document reconstruction pipeline that co
 
 ### 1.1 Problem Statement
 
-Academic documents often exist only as scanned PDFs or images, making them difficult to search, edit, or repurpose. Manual transcription is time-consuming and error-prone. This project addresses the challenge of automatically converting these documents into structured formats while preserving:
+Academic documents often exist only as scanned images, making them difficult to search, edit, or repurpose. Manual transcription is time-consuming and error-prone. This project addresses the challenge of automatically converting these documents into structured formats while preserving:
 
 - Document structure (titles, headings, paragraphs)
 - Mathematical equations (as LaTeX)
@@ -26,7 +26,7 @@ Academic documents often exist only as scanned PDFs or images, making them diffi
 ### 1.2 Objectives
 
 1. Build a modular, testable document processing pipeline
-2. Support multiple input formats (PDF, images)
+2. Support image input formats (PNG, JPG, TIFF, BMP)
 3. Generate structured outputs (JSON, Markdown, DOCX, PDF)
 4. Provide confidence scores for all extracted content
 5. Handle complex layouts including multi-column documents
@@ -40,7 +40,7 @@ Academic documents often exist only as scanned PDFs or images, making them diffi
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   PDF/Image  │────▶│ Preprocessing│────▶│   Layout     │
+│    Image     │────▶│ Preprocessing│────▶│   Layout     │
 │    Input     │     │   (images)   │     │  Detection   │
 └──────────────┘     └──────────────┘     └──────────────┘
                                                  │
@@ -65,20 +65,25 @@ Academic documents often exist only as scanned PDFs or images, making them diffi
              ┌──────────┐       ┌──────────┐       ┌──────────┐
              │   JSON   │       │ Markdown │       │   DOCX   │
              └──────────┘       └──────────┘       └──────────┘
+                                       │
+                                       ▼
+                                ┌──────────┐
+                                │    PDF   │
+                                └──────────┘
 ```
 
 ### 2.2 Module Descriptions
 
 | Module | Purpose | Key Technologies |
 |--------|---------|------------------|
-| `io.py` | File loading and saving | pdf2image, OpenCV |
+| `io.py` | File loading and saving | OpenCV, Pillow |
 | `images.py` | Image preprocessing | OpenCV, scikit-image |
 | `layout.py` | Block detection and classification | LayoutParser, classical CV |
 | `ocr_text.py` | Text extraction | Tesseract, PaddleOCR, EasyOCR |
 | `ocr_math.py` | Equation to LaTeX | pix2tex, Mathpix API |
-| `tables.py` | Table extraction | Camelot, OpenCV |
+| `tables.py` | Table extraction | PaddleOCR PPStructure, OpenCV |
 | `assembler.py` | Document assembly | Custom |
-| `export.py` | Multi-format export | python-docx, LaTeX |
+| `export.py` | Multi-format export | python-docx, fpdf2 |
 
 ---
 
@@ -143,8 +148,8 @@ Layout detection identifies and classifies document regions:
 
 | Method | Best For | Pros | Cons |
 |--------|----------|------|------|
-| **Classical CV** | Simple documents | Fast, no ML dependencies | May miss complex layouts |
-| **Pix2Text** | Academic papers | Auto-detects equations/tables | Larger download |
+| **Default (Classical CV)** | Simple documents | Fast, no ML dependencies | May miss complex layouts |
+| **Pix2Text** | Academic papers | Detects equations/tables | Larger download |
 | **PaddleOCR** | Complex layouts | Good accuracy | Requires PaddlePaddle |
 | **LayoutParser** | Research use | Highly configurable | Complex setup (detectron2) |
 
@@ -208,26 +213,66 @@ Requires `albumentations<1.4.0` due to API changes in newer versions. The `std_r
 
 ### 3.5 Table Extraction
 
-**Three-tier approach:**
+**Multi-engine approach with intelligent fallback:**
 
-1. **Camelot (PDF)**: For PDFs with vector tables
-   - Lattice mode: Detects table lines
-   - Stream mode: For borderless tables
+The system tries extractors in order of preference, logging each attempt:
+
+1. **PaddleOCR PPStructure** (Preferred for images):
+   - Uses PaddleOCR's PPStructure table recognition
+   - Parses HTML output to extract cell data
+   - High accuracy on both bordered and borderless tables
 
 2. **Deep Learning**: Table Transformer for table detection
    - Object detection for table regions
    - Combined with cell extraction
 
 3. **OpenCV Fallback**: Morphological line detection
-   - Horizontal/vertical kernel filtering
-   - Connected component analysis
-   - Grid reconstruction
+   - Dual-mode: bordered tables (line detection) and borderless tables (gap analysis)
+   - Adaptive thresholds for different table styles
+   - Connected component analysis for grid reconstruction
+
+**Extraction Order:**
+```
+PaddleOCR PPStructure → Deep Learning → OpenCV
+```
+
+**Logging:** Each extractor logs its attempts and results:
+```
+[TableExtractor] Trying PaddleOCR PPStructure...
+[TableExtractor] ✓ PaddleOCR found 2 table(s)
+```
 
 **Output Formats:**
 - `table_markdown`: Markdown table syntax
 - `table_html`: HTML `<table>` markup
 - `table_csv`: CSV string
 - `table_struct`: 2D array structure
+
+### 3.6 Export Formats
+
+**Multiple output formats supported:**
+
+| Format | Library | Features |
+|--------|---------|----------|
+| **JSON** | Built-in | Full structured data with metadata |
+| **Markdown** | Built-in | Human-readable text format |
+| **DOCX** | python-docx | Microsoft Word compatible |
+| **PDF** | fpdf2 | Pure Python PDF generation |
+
+**PDF Export (fpdf2):**
+The system uses `fpdf2` for PDF generation - a pure Python library with no system dependencies:
+- Renders markdown content to formatted PDF
+- Supports headings, paragraphs, code blocks, and tables
+- Handles LaTeX equations (rendered as text)
+- Automatic page breaks and margins
+
+```python
+from fpdf import FPDF
+pdf = FPDF()
+pdf.add_page()
+pdf.set_font('Helvetica', 'B', 16)
+pdf.cell(0, 10, 'Document Title')
+```
 
 ---
 
@@ -333,11 +378,11 @@ Testing on sample pages in `examples/sample_pages/`:
 
 | Document | Detection | Confidence | Notes |
 |----------|-----------|------------|-------|
-| screenshot.png (academic PDF) | CLEAN | 89.8% | High-quality, no preprocessing needed |
+| screenshot.png (academic paper) | CLEAN | 89.8% | High-quality, no preprocessing needed |
 | sample_math.png | CLEAN | 85.7% | Math equations detected well |
 | sample_multicol.png | CLEAN | 91.5% | Multi-column layout handled |
 | sample_table.png | CLEAN | 80.3% | Table structure preserved |
-| blur.png (degraded scan) | DEGRADED | 34.2% | Auto-applies aggressive preprocessing |
+| blur.png (degraded scan) | DEGRADED | 34.2% | Applies aggressive preprocessing |
 
 **Adaptive Preprocessing Validation:**
 
@@ -363,12 +408,13 @@ Testing on sample pages in `examples/sample_pages/`:
 
 ### 7.2 Future Improvements
 
-1. **Fine-tuning**: Train layout model on academic document dataset
-2. **Handwriting OCR**: Integrate handwriting-specific models
-3. **Multi-language**: Add language detection and models
-4. **Equation Improvement**: Handle multi-line equations
-5. **GPU Optimization**: Better batch processing for GPU inference
-6. **Active Learning**: User feedback loop for model improvement
+1. **PDF Input Support**: Add support for direct PDF file processing
+2. **Fine-tuning**: Train layout model on academic document dataset
+3. **Handwriting OCR**: Integrate handwriting-specific models
+4. **Multi-language**: Add language detection and models
+5. **Equation Improvement**: Handle multi-line equations
+6. **GPU Optimization**: Better batch processing for GPU inference
+7. **Active Learning**: User feedback loop for model improvement
 
 ---
 
@@ -377,10 +423,12 @@ Testing on sample pages in `examples/sample_pages/`:
 This project successfully implements a modular, extensible document reconstruction pipeline that handles the core requirements of converting scanned academic documents to structured formats. The system achieves good accuracy on printed documents and provides confidence scores to identify uncertain extractions.
 
 Key achievements:
-- End-to-end pipeline from PDF/image to multiple output formats
+- End-to-end pipeline from image to multiple output formats (JSON, Markdown, DOCX, PDF)
+- Multi-engine table extraction with PaddleOCR PPStructure, Deep Learning, and OpenCV
 - Modular architecture allowing component replacement
+- Adaptive preprocessing based on image quality detection
 - Confidence-based quality assessment
-- Both CLI and web interfaces
+- Both CLI and web interfaces (Streamlit)
 
 The pipeline serves as a foundation that can be extended with domain-specific models and additional language support.
 
@@ -393,5 +441,4 @@ The pipeline serves as a foundation that can be extended with domain-specific mo
 3. Smith, R. (2007). An overview of the Tesseract OCR engine. *ICDAR 2007*.
 4. Shafait, F., et al. (2008). Document image denoising using spectral domains. *DRR 2008*.
 5. Shen, Z., et al. (2021). LayoutParser: A unified toolkit for deep learning based document image analysis. *ICDAR 2021*.
-
 
